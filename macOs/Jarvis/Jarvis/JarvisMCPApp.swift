@@ -14,6 +14,16 @@ struct JarvisMCPApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var state = AppState()
 
+    @ViewBuilder
+    private func menuBarImage(opacity: Double) -> some View {
+        if let nsImage = NSImage(named: "MenuBarIcon") {
+            let templateImage = nsImage.copy() as! NSImage
+            let _ = { templateImage.isTemplate = true }()
+            Image(nsImage: templateImage)
+                .opacity(opacity)
+        }
+    }
+
     var body: some Scene {
         // Main window - opens by default
         WindowGroup {
@@ -33,11 +43,10 @@ struct JarvisMCPApp: App {
                     ProgressView()
                         .scaleEffect(0.6)
                         .controlSize(.small)
-                    Image("MenuBarIcon")
+                    menuBarImage(opacity: 1.0)
                 }
             } else {
-                Image("MenuBarIcon")
-                    .opacity(state.processManager.isRunning ? 1.0 : 0.5)
+                menuBarImage(opacity: state.processManager.isRunning ? 1.0 : 0.5)
             }
         }
         .menuBarExtraStyle(.menu)
