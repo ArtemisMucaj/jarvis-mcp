@@ -57,18 +57,12 @@ struct ContentView: View {
                         // Prevent multiple clicks
                         guard !state.processManager.isStarting else { return }
                         
-                        // Validate UV path before starting
-                        if !FileManager.default.isExecutableFile(atPath: state.uvPath) {
-                            errorMessage = "UV executable not found at:\n\(state.uvPath)\n\nPlease check Settings and update the UV path."
-                            showError = true
-                        } else {
-                            state.startServer()
-                            // Check if there was an error starting
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                if let error = state.processManager.lastError {
-                                    errorMessage = error
-                                    showError = true
-                                }
+                        state.startServer()
+                        // Check if there was an error starting
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            if let error = state.processManager.lastError {
+                                errorMessage = error
+                                showError = true
                             }
                         }
                     } label: {

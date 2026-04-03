@@ -7,21 +7,13 @@ class AppState: ObservableObject {
     @Published var processManager: ProcessManager
 
     // Settings (persisted in UserDefaults)
-    @Published var uvPath: String        { didSet { UserDefaults.standard.set(uvPath, forKey: "uvPath") } }
     @Published var port: Int             { didSet { UserDefaults.standard.set(port, forKey: "port") } }
     @Published var presets: [Preset]
     @Published var activePresetID: UUID? {
         didSet { saveActivePresetID() }
     }
 
-    // Auth flow
-    @Published var authOutput: String = ""
-    @Published var isAuthRunning = false
-    
     private var cancellables = Set<AnyCancellable>()
-    
-    // Hardcoded GitHub URL - only this repo is allowed
-    let githubURL = "https://github.com/ArtemisMucaj/jarvis-mcp"
 
     // Default config location
     private var defaultConfigURL: URL {
@@ -42,10 +34,8 @@ class AppState: ObservableObject {
     }
 
     init() {
-        let savedUV      = UserDefaults.standard.string(forKey: "uvPath") ?? ProcessManager.detectUVPath()
         let savedPort    = UserDefaults.standard.integer(forKey: "port")
 
-        self.uvPath         = savedUV
         let port = (1024...65535).contains(savedPort) ? savedPort : 7070
         self.port           = port
         self.processManager = ProcessManager(port: port)
@@ -185,41 +175,6 @@ class AppState: ObservableObject {
         presets.removeAll { $0.id == preset.id }
         if wasActive {
             switchPreset(nil)
-        }
-    }
-
-    // MARK: - OAuth
-
-    func runAuth(for serverName: String) {
-        guard !isAuthRunning else { return }
-        isAuthRunning = true
-        authOutput = ""
-
-        // Auth needs to be run from GitHub URL too
-        DispatchQueue.global(qos: .userInitiated).async {
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: self.uvPath)
-            proc.arguments = [
-                "run", "--from", "git+\(self.githubURL)",
-                "jarvis",
-                "--auth", serverName
-            ]
-            proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError  = pipe
-
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                if let str = String(data: handle.availableData, encoding: .utf8), !str.isEmpty {
-                    DispatchQueue.main.async { self.authOutput += str }
-                }
-            }
-
-            try? proc.run()
-            proc.waitUntilExit()
-
-            DispatchQueue.main.async { self.isAuthRunning = false }
         }
     }
 

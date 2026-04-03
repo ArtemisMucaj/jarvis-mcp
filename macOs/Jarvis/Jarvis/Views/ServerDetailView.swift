@@ -30,41 +30,6 @@ struct ServerDetailView: View {
                 }
             }
 
-            // Auth
-            if server.isOAuth {
-                Section("OAuth Authentication") {
-                    HStack {
-                        Button {
-                            state.runAuth(for: name)
-                        } label: {
-                            Label(
-                                state.isAuthRunning ? "Authenticating…" : "Authenticate",
-                                systemImage: "key.fill"
-                            )
-                        }
-                        .disabled(state.isAuthRunning)
-                        .buttonStyle(.borderedProminent)
-
-                        Spacer()
-                        Text("Tokens are stored in ~/.jarvis/")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if !state.authOutput.isEmpty {
-                        ScrollView {
-                            Text(state.authOutput)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                        }
-                        .frame(height: 130)
-                        .background(Color(.textBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                }
-            }
-
             // Status
             Section("Status") {
                 LabeledContent("Enabled") {
