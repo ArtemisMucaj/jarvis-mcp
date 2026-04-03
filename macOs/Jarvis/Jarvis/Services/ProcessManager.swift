@@ -10,9 +10,11 @@ class ProcessManager: ObservableObject {
     private var process: Process?
     private var processSource: DispatchSourceProcess?
     let port: Int
+    var codeMode: Bool
 
-    init(port: Int = 7070) {
+    init(port: Int = 7070, codeMode: Bool = false) {
         self.port = port
+        self.codeMode = codeMode
         
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
@@ -59,7 +61,9 @@ class ProcessManager: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        proc.arguments = ["--http", "\(port)"]
+        var args = ["--http", "\(port)"]
+        if codeMode { args.append("--code-mode") }
+        proc.arguments = args
         proc.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
         proc.environment = Self.shellEnvironment
         proc.standardOutput = logHandle(for: logURL)
