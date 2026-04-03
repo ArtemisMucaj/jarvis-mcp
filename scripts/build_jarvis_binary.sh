@@ -19,6 +19,13 @@ uv run --with 'pyinstaller==6.19.0' pyinstaller \
   --workpath /tmp/jarvis-pyinstaller-build \
   --specpath /tmp/jarvis-pyinstaller-spec \
   --clean \
+  --copy-metadata fastmcp \
+  --copy-metadata mcp \
+  --copy-metadata anyio \
+  --copy-metadata httpx \
+  --copy-metadata pydantic \
+  --copy-metadata starlette \
+  --copy-metadata uvicorn \
   "$REPO_ROOT/jarvis.py"
 
 echo "==> Done. Binary at: $OUT_DIR/jarvis"
