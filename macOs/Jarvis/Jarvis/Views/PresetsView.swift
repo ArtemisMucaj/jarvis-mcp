@@ -32,7 +32,7 @@ struct PresetsView: View {
 
             Section("Active Config") {
                 LabeledContent("File") {
-                    Text(state.configURL.path)
+                    Text(state.configURL.path(percentEncoded: false))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
@@ -67,6 +67,7 @@ struct PresetsView: View {
 struct PresetRowView: View {
     @Binding var preset: Preset
     @EnvironmentObject var state: AppState
+    @State private var showDeleteConfirm = false
 
     var isActive: Bool { state.activePresetID == preset.id }
 
@@ -86,7 +87,7 @@ struct PresetRowView: View {
                 TextField("Preset name", text: $preset.name)
                     .font(.body)
                     .textFieldStyle(.plain)
-                Text(preset.filePath)
+                Text((preset.filePath as NSString).abbreviatingWithTildeInPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -96,13 +97,27 @@ struct PresetRowView: View {
             Spacer()
 
             Button(role: .destructive) {
-                state.removePreset(preset)
+                showDeleteConfirm = true
             } label: {
                 Image(systemName: "trash")
                     .foregroundStyle(.red.opacity(0.7))
             }
             .buttonStyle(.plain)
             .help("Remove preset")
+            .confirmationDialog(
+                isActive ? "Remove active preset?" : "Remove preset?",
+                isPresented: $showDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Remove\(isActive ? " and restart server" : "")", role: .destructive) {
+                    state.removePreset(preset)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(isActive
+                     ? "This will switch back to the default config and restart the server if it is running."
+                     : "The preset will be removed. The config file on disk is not affected.")
+            }
         }
         .padding(.vertical, 2)
     }
