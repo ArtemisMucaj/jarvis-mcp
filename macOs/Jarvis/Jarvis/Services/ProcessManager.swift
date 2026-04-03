@@ -8,8 +8,7 @@ class ProcessManager: ObservableObject {
     @Published var lastError: String?
 
     private var process: Process?
-    private var pollTimer: Timer?
-    private var healthCheckTimer: Timer?
+    private var processSource: DispatchSourceProcess?
     let port: Int
 
     init(port: Int = 7070) {
@@ -65,24 +64,12 @@ class ProcessManager: ObservableObject {
         proc.environment = Self.shellEnvironment
         proc.standardOutput = logHandle(for: logURL)
         proc.standardError  = logHandle(for: logURL)
-        proc.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async { self?.markStopped() }
-        }
 
         do {
             try proc.run()
             process = proc
             print("✓ Jarvis MCP process launched from bundled binary")
-            DispatchQueue.main.async { self.startHealthCheck() }
-
-            // 15s timeout — bundled binary starts in <2s
-            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-                guard let self, self.isStarting else { return }
-                print("❌ Startup timeout after 15 seconds")
-                self.isStarting = false
-                self.lastError = "Server startup timeout — check logs at \(logURL.path)"
-                self.stop()
-            }
+            DispatchQueue.main.async { self.markRunning() }
         } catch {
             let msg = error.localizedDescription
             DispatchQueue.main.async {
@@ -94,10 +81,8 @@ class ProcessManager: ObservableObject {
     }
 
     func stop() {
-        pollTimer?.invalidate()
-        pollTimer = nil
-        healthCheckTimer?.invalidate()
-        healthCheckTimer = nil
+        processSource?.cancel()
+        processSource = nil
         if let proc = process, proc.isRunning {
             // Kill the entire process group so child processes don't linger
             let pgid = proc.processIdentifier
@@ -115,19 +100,14 @@ class ProcessManager: ObservableObject {
         process = nil
         isRunning = false
         isStarting = false
-        pollTimer?.invalidate()
-        pollTimer = nil
-        healthCheckTimer?.invalidate()
-        healthCheckTimer = nil
+        processSource?.cancel()
+        processSource = nil
     }
-    
+
     private func markRunning() {
-        print("🎉 markRunning() called - setting isRunning=true, isStarting=false")
         isStarting = false
         isRunning = true
-        healthCheckTimer?.invalidate()
-        healthCheckTimer = nil
-        startPolling()
+        if let pid = process?.processIdentifier { watchProcess(pid) }
         print("✅ Jarvis MCP server is ready on port \(port)")
         
         // Show notification
@@ -149,72 +129,13 @@ class ProcessManager: ObservableObject {
         UNUserNotificationCenter.current().add(request)
     }
     
-    private func startHealthCheck() {
-        print("🏥 Starting health check timer...")
-        var attempts = 0
-        healthCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
-            guard let self else {
-                print("⚠️ Health check timer fired but self is nil")
-                timer.invalidate()
-                return
-            }
-            
-            attempts += 1
-            if attempts == 1 {
-                print("🏥 First health check starting...")
-            }
-            if attempts % 5 == 0 {
-                print("⏳ Health check attempt \(attempts)... (isStarting: \(self.isStarting))")
-            }
-            
-            self.checkServerHealth { isHealthy in
-                if isHealthy {
-                    print("✅ Health check succeeded!")
-                    DispatchQueue.main.async {
-                        timer.invalidate()
-                        self.markRunning()
-                    }
-                } else if attempts == 1 {
-                    print("⏳ Server not ready yet, will keep checking...")
-                }
-            }
+    private func watchProcess(_ pid: pid_t) {
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global(qos: .utility))
+        source.setEventHandler { [weak self] in
+            DispatchQueue.main.async { self?.markStopped() }
         }
-    }
-    
-    private func checkServerHealth(completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: endpoint) else {
-            print("❌ Invalid endpoint URL: \(endpoint)")
-            completion(false)
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 2.0
-        
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                // Only log first error
-                if let nsError = error as NSError?, nsError.code != NSURLErrorTimedOut {
-                    print("🔍 Health check error: \(error.localizedDescription)")
-                }
-                completion(false)
-            } else if let httpResponse = response as? HTTPURLResponse {
-                print("✅ Health check got response: HTTP \(httpResponse.statusCode)")
-                // Accept any response (200, 404, etc.) - just means server is up
-                completion(httpResponse.statusCode > 0)
-            } else {
-                completion(false)
-            }
-        }
-        task.resume()
-    }
-
-    private func startPolling() {
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            guard let self, let proc = self.process else { return }
-            if !proc.isRunning { DispatchQueue.main.async { self.markStopped() } }
-        }
+        source.resume()
+        processSource = source
     }
 
     private func logFileURL() -> URL {

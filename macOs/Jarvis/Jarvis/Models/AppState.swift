@@ -14,6 +14,9 @@ class AppState: ObservableObject {
     }
 
     private var cancellables = Set<AnyCancellable>()
+    private var fileWatcherSource: DispatchSourceFileSystemObject?
+    private var fileWatcherFD: Int32 = -1
+    private var reloadWorkItem: DispatchWorkItem?
 
     // Default config location
     private var defaultConfigURL: URL {
@@ -48,6 +51,7 @@ class AppState: ObservableObject {
 
         // Load config from the active preset's path (or default if none active)
         loadConfig()
+        startFileWatcher()
         
         // CRITICAL: Forward ProcessManager changes to AppState so UI updates
         processManager.objectWillChange.sink { [weak self] _ in
@@ -62,8 +66,67 @@ class AppState: ObservableObject {
         // emits on any mutation, so this catches in-place name changes.
         $presets
             .dropFirst()
-            .sink { [weak self] _ in self?.savePresets() }
+            .sink { [weak self] newPresets in self?.savePresets(newPresets) }
             .store(in: &cancellables)
+    }
+
+    // MARK: - File Watcher
+
+    /// Watches the active `configURL` for external modifications using kqueue via GCD.
+    /// Debounces rapid writes (editors often write multiple times on save) by 0.3s.
+    private func startFileWatcher() {
+        stopFileWatcher()
+
+        let path = configURL.path
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else {
+            print("⚠️ Could not open \(path) for watching")
+            return
+        }
+        fileWatcherFD = fd
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .global(qos: .utility)
+        )
+
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Debounce: cancel any pending reload and schedule a new one
+            self.reloadWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                print("🔄 Config file changed on disk, reloading…")
+                DispatchQueue.main.async {
+                    self.loadConfig()
+                    // Restart watcher: the fd may now point to a stale inode
+                    // (editors do atomic saves via write-tmp + rename)
+                    self.startFileWatcher()
+                }
+            }
+            self.reloadWorkItem = work
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.3, execute: work)
+        }
+
+        source.setCancelHandler {
+            if fd >= 0 { close(fd) }
+        }
+
+        source.resume()
+        fileWatcherSource = source
+        print("👁️ Watching config file: \(path)")
+    }
+
+    private func stopFileWatcher() {
+        reloadWorkItem?.cancel()
+        reloadWorkItem = nil
+        fileWatcherSource?.cancel()
+        fileWatcherSource = nil
+    }
+
+    deinit {
+        stopFileWatcher()
     }
 
     // MARK: - Config
@@ -158,6 +221,7 @@ class AppState: ObservableObject {
         let wasRunning = processManager.isRunning || processManager.isStarting
         activePresetID = preset?.id
         loadConfig()
+        startFileWatcher() // Re-watch the new config path
         if wasRunning {
             restartServer()
         }
@@ -180,8 +244,8 @@ class AppState: ObservableObject {
 
     // MARK: - Preset Persistence
 
-    private func savePresets() {
-        if let data = try? JSONEncoder().encode(presets) {
+    private func savePresets(_ presetsToSave: [Preset]) {
+        if let data = try? JSONEncoder().encode(presetsToSave) {
             UserDefaults.standard.set(data, forKey: "presets")
         }
     }

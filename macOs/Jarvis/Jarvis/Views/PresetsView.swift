@@ -16,15 +16,11 @@ struct PresetsView: View {
     var body: some View {
         Form {
             Section {
-                if state.presets.isEmpty {
-                    Text("No presets added yet.")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 8)
-                } else {
-                    ForEach($state.presets) { $preset in
-                        PresetRowView(preset: $preset)
-                    }
+                // Default config — always visible
+                DefaultPresetRowView()
+
+                ForEach($state.presets) { $preset in
+                    PresetRowView(preset: $preset)
                 }
             } header: {
                 HStack {
@@ -160,6 +156,7 @@ struct PresetsView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.json]
+        panel.showsHiddenFiles = true
         panel.message = "Select a servers.json config file"
         panel.prompt = "Add Preset"
 
@@ -167,6 +164,41 @@ struct PresetsView: View {
             let name = url.deletingPathExtension().lastPathComponent
             state.addPreset(name: name, filePath: url.path)
         }
+    }
+}
+
+struct DefaultPresetRowView: View {
+    @EnvironmentObject var state: AppState
+
+    var isActive: Bool { state.activePresetID == nil }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                if !isActive { state.switchPreset(nil) }
+            } label: {
+                Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .help(isActive ? "Default config is active" : "Switch to default config")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Default")
+                    .font(.body)
+                let path = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".jarvis/servers.json").path
+                Text((path as NSString).abbreviatingWithTildeInPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -180,14 +212,14 @@ struct PresetRowView: View {
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                state.switchPreset(isActive ? nil : preset)
+                if !isActive { state.switchPreset(preset) }
             } label: {
                 Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
                     .font(.title3)
             }
             .buttonStyle(.plain)
-            .help(isActive ? "Deactivate preset (use default)" : "Switch to this preset")
+            .help(isActive ? "This preset is active" : "Switch to this preset")
 
             VStack(alignment: .leading, spacing: 2) {
                 TextField("Preset name", text: $preset.name)
@@ -202,7 +234,7 @@ struct PresetRowView: View {
 
             Spacer()
 
-            Button(role: .destructive) {
+            Button {
                 showDeleteConfirm = true
             } label: {
                 Image(systemName: "trash")
@@ -210,22 +242,22 @@ struct PresetRowView: View {
             }
             .buttonStyle(.plain)
             .help("Remove preset")
-            .confirmationDialog(
-                isActive ? "Remove active preset?" : "Remove preset?",
-                isPresented: $showDeleteConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Remove\(isActive ? " and restart server" : "")", role: .destructive) {
-                    state.removePreset(preset)
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(isActive
-                     ? "This will switch back to the default config and restart the server if it is running."
-                     : "The preset will be removed. The config file on disk is not affected.")
-            }
         }
         .padding(.vertical, 2)
+        .confirmationDialog(
+            isActive ? "Remove active preset?" : "Remove preset?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Remove\(isActive ? " and restart server" : "")", role: .destructive) {
+                state.removePreset(preset)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(isActive
+                 ? "This will switch back to the default config and restart the server if it is running."
+                 : "The preset will be removed. The config file on disk is not affected.")
+        }
     }
 }
 
