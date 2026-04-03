@@ -35,6 +35,9 @@ class AppState: ObservableObject {
             .appendingPathComponent("servers.json")
     }
     
+    /// The active config file URL: resolves to the active preset's path if one is set,
+    /// otherwise falls back to the default `~/.jarvis/servers.json`.
+    /// Exposed internally so `PresetsView` can display the current config path.
     var configURL: URL {
         if let id = activePresetID,
            let preset = presets.first(where: { $0.id == id }) {
@@ -60,7 +63,7 @@ class AppState: ObservableObject {
             self.activePresetID = nil
         }
 
-        // Always try to load config from default location
+        // Load config from the active preset's path (or default if none active)
         loadConfig()
         
         // CRITICAL: Forward ProcessManager changes to AppState so UI updates

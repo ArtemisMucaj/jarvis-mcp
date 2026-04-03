@@ -12,7 +12,7 @@ struct ContentView: View {
     
     private var logURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".jarvis-mcp/jarvis.log")
+            .appendingPathComponent(".jarvis/jarvis.log")
     }
 
     var sortedNames: [String] { state.servers.keys.sorted() }
@@ -203,8 +203,7 @@ struct ContentView: View {
     }
     
     private func openConfigFile() {
-        let configURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".jarvis/servers.json")
+        let configURL = state.configURL
         
         // Create file if it doesn't exist
         if !FileManager.default.fileExists(atPath: configURL.path) {
