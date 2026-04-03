@@ -2,9 +2,9 @@
   <!-- Black background -->
   <rect width="512" height="512" fill="#000000"/>
   
-  <!-- Letter J - clean and simple -->
+  <!-- Letter J - centered: x shifted +36 to center horizontally, y shifted +10 -->
   <path 
-    d="M 280 140 L 280 320 Q 280 380 220 380 Q 160 380 160 320 L 160 280 L 200 280 L 200 320 Q 200 340 220 340 Q 240 340 240 320 L 240 140 L 280 140 Z" 
+    d="M 316 150 L 316 330 Q 316 390 256 390 Q 196 390 196 330 L 196 290 L 236 290 L 236 330 Q 236 350 256 350 Q 276 350 276 330 L 276 150 L 316 150 Z" 
     fill="#0EA5E9"
   />
 </svg>
