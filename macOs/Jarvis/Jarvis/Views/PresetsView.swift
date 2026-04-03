@@ -6,7 +6,7 @@ struct PresetsView: View {
     @EnvironmentObject var state: AppState
 
     @State private var logContent = ""
-    @State private var isAutoRefreshing = true
+    @State private var isAutoRefreshing = false
     @State private var refreshTimer: Timer?
     @State private var lastReadOffset: UInt64 = 0
 

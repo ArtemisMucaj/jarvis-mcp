@@ -27,7 +27,10 @@ struct JarvisMCPApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
-                .onAppear { appDelegate.state = state }
+                .onAppear {
+                    appDelegate.state = state
+                    state.startServer()
+                }
         }
         .defaultSize(width: 780, height: 520)
         
