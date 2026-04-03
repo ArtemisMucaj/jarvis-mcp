@@ -8,7 +8,7 @@ from mcp import McpError
 from fastmcp.client.auth import OAuth
 from fastmcp.mcp_config import MCPConfig
 from fastmcp.server import create_proxy
-from fastmcp.server.transforms.search import BM25SearchTransform
+from fastmcp.experimental.transforms.code_mode import CodeMode
 from key_value.aio.stores.disk import DiskStore
 
 
@@ -76,11 +76,7 @@ mcp = create_proxy(
     name="jarvis",
 )
 
-mcp.add_transform(
-    BM25SearchTransform(
-        max_results=5,
-    )
-)
+mcp.add_transform(CodeMode())
 
 if __name__ == "__main__":
     import asyncio
