@@ -35,8 +35,12 @@ class AppState: ObservableObject {
             .appendingPathComponent("servers.json")
     }
     
-    private var configURL: URL {
-        defaultConfigURL
+    var configURL: URL {
+        if let id = activePresetID,
+           let preset = presets.first(where: { $0.id == id }) {
+            return URL(fileURLWithPath: preset.filePath)
+        }
+        return defaultConfigURL
     }
 
     init() {
