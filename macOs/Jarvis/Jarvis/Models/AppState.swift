@@ -158,7 +158,7 @@ class AppState: ObservableObject {
 
     func restartServer() {
         processManager.stop()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.startServer() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.startServer() }
     }
 
     /// Activates the given preset, or reverts to the default config if `preset` is `nil`.

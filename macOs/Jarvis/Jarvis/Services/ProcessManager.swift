@@ -32,11 +32,12 @@ class ProcessManager: ObservableObject {
             print("⚠️ Already running or starting - ignoring start request")
             return
         }
-        lastError = nil
+        DispatchQueue.main.async { self.lastError = nil }
 
         guard let resourcePath = Bundle.main.resourcePath else {
-            lastError = "Could not locate app bundle resources."
-            print("❌ \(lastError!)")
+            let msg = "Could not locate app bundle resources."
+            DispatchQueue.main.async { self.lastError = msg }
+            print("❌ \(msg)")
             return
         }
 
@@ -44,8 +45,9 @@ class ProcessManager: ObservableObject {
         let fileManager = FileManager.default
 
         guard fileManager.isExecutableFile(atPath: binaryPath) else {
-            lastError = "Bundled jarvis binary not found at: \(binaryPath)\n\nRebuild the app after running scripts/build_jarvis_binary.sh"
-            print("❌ \(lastError!)")
+            let msg = "Bundled jarvis binary not found at: \(binaryPath)\n\nRebuild the app after running scripts/build_jarvis_binary.sh"
+            DispatchQueue.main.async { self.lastError = msg }
+            print("❌ \(msg)")
             return
         }
 
@@ -73,17 +75,20 @@ class ProcessManager: ObservableObject {
             print("✓ Jarvis MCP process launched from bundled binary")
             DispatchQueue.main.async { self.startHealthCheck() }
 
-            // 90s timeout (first run may need to warm up)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in
+            // 15s timeout — bundled binary starts in <2s
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
                 guard let self, self.isStarting else { return }
-                print("❌ Startup timeout after 90 seconds")
+                print("❌ Startup timeout after 15 seconds")
                 self.isStarting = false
                 self.lastError = "Server startup timeout — check logs at \(logURL.path)"
                 self.stop()
             }
         } catch {
-            DispatchQueue.main.async { self.isStarting = false }
-            lastError = error.localizedDescription
+            let msg = error.localizedDescription
+            DispatchQueue.main.async {
+                self.isStarting = false
+                self.lastError = msg
+            }
             print("❌ Failed to start bundled jarvis: \(error)")
         }
     }
@@ -94,7 +99,7 @@ class ProcessManager: ObservableObject {
         healthCheckTimer?.invalidate()
         healthCheckTimer = nil
         if let proc = process, proc.isRunning {
-            // Kill the entire process group (uv + python child) so nothing lingers
+            // Kill the entire process group so child processes don't linger
             let pgid = proc.processIdentifier
             kill(-pgid, SIGTERM)
             proc.terminate()
