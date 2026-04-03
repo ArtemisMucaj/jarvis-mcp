@@ -8,6 +8,7 @@ struct PresetsView: View {
     @State private var logContent = "Loading logs..."
     @State private var isAutoRefreshing = true
     @State private var refreshTimer: Timer?
+    @State private var lastKnownFileSize: Int = -1
 
     private let logURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".jarvis/jarvis.log")
@@ -64,7 +65,7 @@ struct PresetsView: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .help("Automatically refresh logs every second")
-                    Button("Refresh", action: loadLogs)
+                    Button("Refresh") { loadLogs() }
                         .buttonStyle(.borderless)
                     Button("Clear", action: clearLogs)
                         .buttonStyle(.borderless)
@@ -91,8 +92,12 @@ struct PresetsView: View {
 
     // MARK: - Log helpers
 
-    private func loadLogs() {
+    private func loadLogs(force: Bool = false) {
         DispatchQueue.global(qos: .utility).async {
+            // Cheap stat check — skip the full read if the file hasn't grown
+            let currentSize = (try? FileManager.default.attributesOfItem(atPath: logURL.path(percentEncoded: false)))?[.size] as? Int ?? 0
+            guard force || currentSize != lastKnownFileSize else { return }
+
             let content: String
             if let raw = try? String(contentsOf: logURL, encoding: .utf8) {
                 let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
@@ -101,6 +106,7 @@ struct PresetsView: View {
                 content = "No logs found at \(logURL.path(percentEncoded: false))\n\nThe log file will be created when the server starts."
             }
             DispatchQueue.main.async {
+                lastKnownFileSize = currentSize
                 logContent = content
             }
         }
@@ -108,7 +114,8 @@ struct PresetsView: View {
 
     private func clearLogs() {
         try? "".write(to: logURL, atomically: true, encoding: .utf8)
-        loadLogs()
+        lastKnownFileSize = -1
+        loadLogs(force: true)
     }
 
     private func startAutoRefresh() {
@@ -213,7 +220,7 @@ struct LogSectionView: View {
                     .frame(height: 1)
                     .id("logBottom")
             }
-            .frame(minHeight: 200)
+            .frame(height: 300)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .onChange(of: logContent) { _, _ in
