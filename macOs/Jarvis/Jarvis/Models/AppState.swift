@@ -10,6 +10,12 @@ class AppState: ObservableObject {
     @Published var uvPath: String        { didSet { UserDefaults.standard.set(uvPath, forKey: "uvPath") } }
     @Published var port: Int             { didSet { UserDefaults.standard.set(port, forKey: "port") } }
     @Published var projectPath: String   { didSet { UserDefaults.standard.set(projectPath, forKey: "projectPath") } }
+    @Published var presets: [Preset] {
+        didSet { savePresets() }
+    }
+    @Published var activePresetID: UUID? {
+        didSet { saveActivePresetID() }
+    }
 
     var isLocalMode: Bool { !projectPath.isEmpty }
 
@@ -39,9 +45,12 @@ class AppState: ObservableObject {
         let savedProject = UserDefaults.standard.string(forKey: "projectPath") ?? ""
 
         self.uvPath         = savedUV
-        self.port           = savedPort == 0 ? 7070 : savedPort
+        let port = (1024...65535).contains(savedPort) ? savedPort : 7070
+        self.port           = port
         self.projectPath    = savedProject
-        self.processManager = ProcessManager(port: savedPort == 0 ? 7070 : savedPort)
+        self.processManager = ProcessManager(port: port)
+        self.presets = []
+        self.activePresetID = nil
 
         // Always try to load config from default location
         loadConfig()
@@ -53,6 +62,9 @@ class AppState: ObservableObject {
             }
         }
         .store(in: &cancellables)
+
+        self.presets = loadPresets()
+        self.activePresetID = loadActivePresetID()
     }
 
     // MARK: - Config
@@ -177,5 +189,29 @@ class AppState: ObservableObject {
 
             DispatchQueue.main.async { self.isAuthRunning = false }
         }
+    }
+
+    // MARK: - Preset Persistence
+
+    private func savePresets() {
+        if let data = try? JSONEncoder().encode(presets) {
+            UserDefaults.standard.set(data, forKey: "presets")
+        }
+    }
+
+    private func saveActivePresetID() {
+        UserDefaults.standard.set(activePresetID?.uuidString, forKey: "activePresetID")
+    }
+
+    private func loadPresets() -> [Preset] {
+        guard let data = UserDefaults.standard.data(forKey: "presets"),
+              let presets = try? JSONDecoder().decode([Preset].self, from: data)
+        else { return [] }
+        return presets
+    }
+
+    private func loadActivePresetID() -> UUID? {
+        guard let str = UserDefaults.standard.string(forKey: "activePresetID") else { return nil }
+        return UUID(uuidString: str)
     }
 }
