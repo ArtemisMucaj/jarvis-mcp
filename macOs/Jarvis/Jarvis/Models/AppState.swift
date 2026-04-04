@@ -6,15 +6,19 @@ class AppState: ObservableObject {
     @Published var servers: [String: MCPServer] = [:]
     @Published var processManager: ProcessManager
 
-    // Settings (persisted in UserDefaults)
-    @Published var port: Int             { didSet { UserDefaults.standard.set(port, forKey: "port") } }
-    // Note: codeMode is read by ProcessManager only at launch (startBundled).
-    // Changing it while the server is running has no effect until the next restart.
-    // The SettingsView informs the user of this with a "Takes effect on next server restart" hint.
+    // Settings (persisted in UserDefaults); changes auto-restart the server if it is running.
+    @Published var port: Int {
+        didSet {
+            UserDefaults.standard.set(port, forKey: "port")
+            processManager.port = port
+            if processManager.isRunning || processManager.isStarting { restartServer() }
+        }
+    }
     @Published var codeMode: Bool {
         didSet {
             UserDefaults.standard.set(codeMode, forKey: "codeMode")
             processManager.codeMode = codeMode
+            if processManager.isRunning || processManager.isStarting { restartServer() }
         }
     }
     @Published var presets: [Preset]

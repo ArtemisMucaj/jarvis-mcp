@@ -9,7 +9,7 @@ class ProcessManager: ObservableObject {
 
     private var process: Process?
     private var processSource: DispatchSourceProcess?
-    let port: Int
+    var port: Int
     var codeMode: Bool
 
     init(port: Int = 7070, codeMode: Bool = false) {
