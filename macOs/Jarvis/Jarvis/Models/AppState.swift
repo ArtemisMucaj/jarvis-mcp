@@ -9,6 +9,10 @@ class AppState: ObservableObject {
     // Settings (persisted in UserDefaults); changes auto-restart the server if it is running.
     @Published var port: Int {
         didSet {
+            guard (1024...65535).contains(port) else {
+                port = oldValue
+                return
+            }
             UserDefaults.standard.set(port, forKey: "port")
             processManager.port = port
             if processManager.isRunning || processManager.isStarting { restartServer() }
