@@ -79,7 +79,7 @@ Jarvis ships as a native macOS menu bar app (SwiftUI). It keeps the proxy runnin
 - **Preset config switcher** — save and switch between multiple `servers.json` files (e.g. work, personal, testing)
 - **Inline log viewer** — tail `~/.jarvis/jarvis.log` in real-time directly in the Presets panel
 - **System notifications** — notified when the server becomes ready
-- **Settings** — configure the HTTP port (default: `7070`)
+- **Settings** — configure the HTTP port (default: `7070`) and toggle **Code Mode**
 
 ### Connecting agents
 
@@ -114,6 +114,16 @@ uv run python jarvis.py
 uv run python jarvis.py --http 7070
 ```
 
+### Code Mode
+
+By default Jarvis uses BM25 search to surface relevant tools. Pass `--code-mode` to switch to FastMCP's Code Mode, where the LLM writes sandboxed Python scripts that batch multiple tool calls in a single step:
+
+```bash
+uv run python jarvis.py --http 7070 --code-mode
+```
+
+Code Mode can also be toggled in the macOS app under **Settings**.
+
 ### OAuth authentication
 
 Servers with `"auth": "oauth"` require a one-time browser login:
@@ -126,6 +136,10 @@ Tokens are persisted to `~/.jarvis/` and reused automatically on subsequent runs
 
 ## How it works
 
+Jarvis exposes only 2 tools to the agent regardless of how many MCP servers are configured. Two modes are available:
+
+### Default mode (BM25 search)
+
 ```
 Agent sees: search_tools + call_tool (2 tools, ~50 tokens)
 
@@ -134,6 +148,21 @@ Agent wants to create a GitLab MR:
   -> BM25 returns top 5 matching tools with full schemas
   -> call_tool("gitlab_create_merge_request", {...})
   -> Jarvis proxies the call to the GitLab MCP server
+```
+
+### Code Mode (`--code-mode`)
+
+Instead of searching and calling tools one at a time, the LLM writes a sandboxed Python script that batches multiple tool calls in a single step. Useful when a task requires many sequential tool interactions.
+
+```
+Agent sees: run_python_code (1 tool)
+
+Agent wants to create a GitLab MR and post a comment:
+  -> run_python_code("""
+       result = gitlab_create_merge_request(title="feat: ...", ...)
+       gitlab_create_note(mr_iid=result["iid"], body="Ready for review")
+     """)
+  -> Jarvis executes both calls and returns the combined result
 ```
 
 ## File locations
