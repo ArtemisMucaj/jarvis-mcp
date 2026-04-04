@@ -2,12 +2,14 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
 from mcp import McpError
 from fastmcp.client.auth import OAuth
 from fastmcp.mcp_config import MCPConfig
 from fastmcp.server import create_proxy
+from fastmcp.experimental.transforms.code_mode import CodeMode
 from fastmcp.server.transforms.search import BM25SearchTransform
 from key_value.aio.stores.disk import DiskStore
 
@@ -76,15 +78,13 @@ mcp = create_proxy(
     name="jarvis",
 )
 
-mcp.add_transform(
-    BM25SearchTransform(
-        max_results=5,
-    )
-)
+if "--code-mode" in sys.argv:
+    mcp.add_transform(CodeMode())
+else:
+    mcp.add_transform(BM25SearchTransform(max_results=5))
 
 if __name__ == "__main__":
     import asyncio
-    import sys
 
     if "--auth" in sys.argv:
         target = next((a for a in sys.argv[2:] if not a.startswith("-")), None)

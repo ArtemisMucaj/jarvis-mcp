@@ -14,6 +14,12 @@ struct SettingsView: View {
                             .frame(width: 80)
                             .multilineTextAlignment(.trailing)
                     }
+                    Toggle("Code Mode", isOn: $state.codeMode)
+                    if state.codeMode {
+                        Text("The LLM writes sandboxed Python scripts to batch tool calls instead of calling tools one at a time.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .formStyle(.grouped)

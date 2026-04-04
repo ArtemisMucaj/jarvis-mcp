@@ -6,8 +6,25 @@ class AppState: ObservableObject {
     @Published var servers: [String: MCPServer] = [:]
     @Published var processManager: ProcessManager
 
-    // Settings (persisted in UserDefaults)
-    @Published var port: Int             { didSet { UserDefaults.standard.set(port, forKey: "port") } }
+    // Settings (persisted in UserDefaults); changes auto-restart the server if it is running.
+    @Published var port: Int {
+        didSet {
+            guard (1024...65535).contains(port) else {
+                port = oldValue
+                return
+            }
+            UserDefaults.standard.set(port, forKey: "port")
+            processManager.port = port
+            if processManager.isRunning || processManager.isStarting { restartServer() }
+        }
+    }
+    @Published var codeMode: Bool {
+        didSet {
+            UserDefaults.standard.set(codeMode, forKey: "codeMode")
+            processManager.codeMode = codeMode
+            if processManager.isRunning || processManager.isStarting { restartServer() }
+        }
+    }
     @Published var presets: [Preset]
     @Published var activePresetID: UUID? {
         didSet { saveActivePresetID() }
@@ -37,11 +54,13 @@ class AppState: ObservableObject {
     }
 
     init() {
-        let savedPort    = UserDefaults.standard.integer(forKey: "port")
+        let savedPort     = UserDefaults.standard.integer(forKey: "port")
+        let savedCodeMode = UserDefaults.standard.bool(forKey: "codeMode")
 
         let port = (1024...65535).contains(savedPort) ? savedPort : 7070
         self.port           = port
-        self.processManager = ProcessManager(port: port)
+        self.codeMode       = savedCodeMode
+        self.processManager = ProcessManager(port: port, codeMode: savedCodeMode)
         self.presets = AppState.loadPresets()
         self.activePresetID = AppState.loadActivePresetID()
 
