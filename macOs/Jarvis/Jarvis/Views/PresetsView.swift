@@ -19,8 +19,8 @@ struct PresetsView: View {
                 // Default config — always visible
                 DefaultPresetRowView()
 
-                ForEach($state.presets) { $preset in
-                    PresetRowView(preset: $preset)
+                ForEach(state.presets) { preset in
+                    PresetRowView(preset: preset)
                 }
             } header: {
                 HStack {
@@ -32,6 +32,10 @@ struct PresetsView: View {
                         Label("Add Preset", systemImage: "plus")
                     }
                     .buttonStyle(.borderless)
+                    .disabled(!state.processManager.isRunning)
+                    .help(state.processManager.isRunning
+                          ? "Add a new preset"
+                          : "Start the server to manage presets")
                 }
             }
 
@@ -75,6 +79,8 @@ struct PresetsView: View {
         .onAppear {
             loadLogs()
             startAutoRefresh()
+            // Sync preset list from server if it's running
+            if state.processManager.isRunning { state.fetchPresets() }
         }
         .onDisappear {
             isAutoRefreshing = false
@@ -102,8 +108,6 @@ struct PresetsView: View {
             let fileSize = (try? handle.seekToEnd()) ?? 0
 
             if force || lastReadOffset == 0 {
-                // Full read: seek to a point that captures at most 10_000 lines worth of bytes.
-                // We read up to 512 KB from the end, then trim to the last 10_000 lines.
                 let windowSize: UInt64 = 512 * 1024
                 let startOffset = fileSize > windowSize ? fileSize - windowSize : 0
                 try? handle.seek(toOffset: startOffset)
@@ -116,18 +120,14 @@ struct PresetsView: View {
                     lastReadOffset = fileSize
                 }
             } else if fileSize > lastReadOffset {
-                // Incremental read: only the new bytes since last read
                 try? handle.seek(toOffset: lastReadOffset)
                 let data = handle.readDataToEndOfFile()
-                guard let newText = String(data: data, encoding: .utf8), !newText.isEmpty else {
-                    return
-                }
+                guard let newText = String(data: data, encoding: .utf8), !newText.isEmpty else { return }
                 DispatchQueue.main.async {
                     logContent += newText
                     lastReadOffset = fileSize
                 }
             }
-            // fileSize == lastReadOffset: nothing new, do nothing
         }
     }
 
@@ -167,6 +167,8 @@ struct PresetsView: View {
     }
 }
 
+// MARK: - Default preset row
+
 struct DefaultPresetRowView: View {
     @EnvironmentObject var state: AppState
 
@@ -182,6 +184,7 @@ struct DefaultPresetRowView: View {
                     .font(.title3)
             }
             .buttonStyle(.plain)
+            .disabled(!state.processManager.isRunning && !isActive)
             .help(isActive ? "Default config is active" : "Switch to default config")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -202,9 +205,12 @@ struct DefaultPresetRowView: View {
     }
 }
 
+// MARK: - Preset row
+
 struct PresetRowView: View {
-    @Binding var preset: Preset
+    let preset: Preset
     @EnvironmentObject var state: AppState
+    @State private var editingName: String = ""
     @State private var showDeleteConfirm = false
 
     var isActive: Bool { state.activePresetID == preset.id }
@@ -219,12 +225,19 @@ struct PresetRowView: View {
                     .font(.title3)
             }
             .buttonStyle(.plain)
+            .disabled(!state.processManager.isRunning && !isActive)
             .help(isActive ? "This preset is active" : "Switch to this preset")
 
             VStack(alignment: .leading, spacing: 2) {
-                TextField("Preset name", text: $preset.name)
+                TextField("Preset name", text: $editingName)
                     .font(.body)
                     .textFieldStyle(.plain)
+                    .disabled(!state.processManager.isRunning)
+                    .onSubmit {
+                        if state.processManager.isRunning {
+                            state.renamePreset(id: preset.id, to: editingName)
+                        }
+                    }
                 Text((preset.filePath as NSString).abbreviatingWithTildeInPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -241,9 +254,16 @@ struct PresetRowView: View {
                     .foregroundStyle(.red.opacity(0.7))
             }
             .buttonStyle(.plain)
+            .disabled(!state.processManager.isRunning)
             .help("Remove preset")
         }
         .padding(.vertical, 2)
+        .onAppear { editingName = preset.name }
+        .onChange(of: preset.name) { _, new in editingName = new }
+        .onChange(of: state.processManager.isRunning) { _, isRunning in
+            // Reset transient edits when server becomes unavailable
+            if !isRunning { editingName = preset.name }
+        }
         .confirmationDialog(
             isActive ? "Remove active preset?" : "Remove preset?",
             isPresented: $showDeleteConfirm,
@@ -260,6 +280,8 @@ struct PresetRowView: View {
         }
     }
 }
+
+// MARK: - Log section
 
 struct LogSectionView: View {
     let logContent: String

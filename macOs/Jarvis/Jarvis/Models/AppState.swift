@@ -8,24 +8,47 @@ struct DiscoveredTool: Identifiable {
     var id: String { name }
 }
 
+// MARK: - Private Codable helpers
+
 private struct ToolEntry: Codable {
     let name: String
     let description: String
 }
+
+/// Shape of ~/.jarvis/presets.json (written by the Python server).
+private struct PresetsFile: Codable {
+    var presets: [Preset]
+    var activePresetID: String?
+}
+
+/// Shape returned by GET /api/presets.
+private struct PresetsResponse: Codable {
+    let presets: [Preset]
+    let activePresetID: String?
+    let activeConfigPath: String?
+}
+
+/// Shape returned by POST /api/presets.
+private struct CreatePresetResponse: Codable {
+    let preset: Preset
+}
+
+// MARK: - AppState
 
 class AppState: ObservableObject {
     @Published var servers: [String: MCPServer] = [:]
     @Published var processManager: ProcessManager
     @Published var discoveredTools: [String: [DiscoveredTool]] = [:]
     @Published var isDiscoveringTools = false
+    @Published var presets: [Preset] = []
+    @Published var activePresetID: UUID?
 
-    // Settings (persisted in UserDefaults); changes auto-restart the server if it is running.
+    // Settings (persisted in UserDefaults); changes auto-restart the server if running.
     @Published var port: Int {
         didSet {
-            guard (1024...65535).contains(port) else {
-                port = oldValue
-                return
-            }
+            // Clamp to 1024...65534 to ensure apiPort (port + 1) never exceeds 65535
+            let clamped = max(1024, min(65534, port))
+            if port != clamped { port = clamped; return }
             UserDefaults.standard.set(port, forKey: "port")
             processManager.port = port
             if processManager.isRunning || processManager.isStarting { restartServer() }
@@ -38,26 +61,24 @@ class AppState: ObservableObject {
             if processManager.isRunning || processManager.isStarting { restartServer() }
         }
     }
-    @Published var presets: [Preset]
-    @Published var activePresetID: UUID? {
-        didSet { saveActivePresetID() }
-    }
 
     private var cancellables = Set<AnyCancellable>()
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var fileWatcherFD: Int32 = -1
     private var reloadWorkItem: DispatchWorkItem?
 
-    // Default config location
+    /// API port is always MCP port + 1 (matches jarvis.py _start_api_thread).
+    var apiPort: Int { port + 1 }
+    private var apiBase: String { "http://127.0.0.1:\(apiPort)" }
+
+    // MARK: - Config URL
+
     private var defaultConfigURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".jarvis")
-            .appendingPathComponent("servers.json")
+            .appendingPathComponent(".jarvis/servers.json")
     }
-    
-    /// The active config file URL: resolves to the active preset's path if one is set,
-    /// otherwise falls back to the default `~/.jarvis/servers.json`.
-    /// Exposed internally so `PresetsView` can display the current config path.
+
+    /// The active config file path, derived from the local (API-synced) preset state.
     var configURL: URL {
         if let id = activePresetID,
            let preset = presets.first(where: { $0.id == id }) {
@@ -66,55 +87,56 @@ class AppState: ObservableObject {
         return defaultConfigURL
     }
 
+    // MARK: - Init
+
     init() {
         let savedPort     = UserDefaults.standard.integer(forKey: "port")
         let savedCodeMode = UserDefaults.standard.bool(forKey: "codeMode")
+        // Clamp to 1024...65534 to ensure apiPort (port + 1) never exceeds 65535
+        let port          = (1024...65534).contains(savedPort) ? savedPort : 7070
 
-        let port = (1024...65535).contains(savedPort) ? savedPort : 7070
         self.port           = port
         self.codeMode       = savedCodeMode
         self.processManager = ProcessManager(port: port, codeMode: savedCodeMode)
-        self.presets = AppState.loadPresets()
-        self.activePresetID = AppState.loadActivePresetID()
 
-        if let id = self.activePresetID, !self.presets.contains(where: { $0.id == id }) {
-            self.activePresetID = nil
-        }
+        // Bootstrap preset state from disk so the UI is populated before the server starts.
+        let (initialPresets, initialActiveID) = AppState.loadPresetsFromDisk()
+        self.presets        = initialPresets
+        self.activePresetID = initialActiveID
 
-        // Load config from the active preset's path (or default if none active)
         loadConfig()
         startFileWatcher()
-        
-        // CRITICAL: Forward ProcessManager changes to AppState so UI updates
+
+        // Forward ProcessManager changes to AppState so UI updates.
         processManager.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.objectWillChange.send()
-            }
+            DispatchQueue.main.async { self?.objectWillChange.send() }
         }
         .store(in: &cancellables)
+    }
 
-        // Persist preset name edits: didSet only fires on full reassignment,
-        // not on element-level mutations via @Binding. The Combine publisher
-        // emits on any mutation, so this catches in-place name changes.
-        $presets
-            .dropFirst()
-            .sink { [weak self] newPresets in self?.savePresets(newPresets) }
-            .store(in: &cancellables)
+    // MARK: - Disk bootstrap (used only before the server is online)
+
+    /// Read presets from ~/.jarvis/presets.json without going through the API.
+    /// This is called once at init so the UI has data before the server starts.
+    static func loadPresetsFromDisk() -> ([Preset], UUID?) {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".jarvis/presets.json")
+        guard let data = try? Data(contentsOf: path),
+              let file = try? JSONDecoder().decode(PresetsFile.self, from: data)
+        else { return ([], nil) }
+        let activeID = file.activePresetID.flatMap { UUID(uuidString: $0) }
+        return (file.presets, activeID)
     }
 
     // MARK: - File Watcher
 
-    /// Watches the active `configURL` for external modifications using kqueue via GCD.
-    /// Debounces rapid writes (editors often write multiple times on save) by 0.3s.
+    /// Watches the active configURL for external modifications using kqueue.
+    /// Debounces rapid writes (editors often write multiple times on save) by 0.3 s.
     private func startFileWatcher() {
         stopFileWatcher()
-
         let path = configURL.path
         let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else {
-            print("⚠️ Could not open \(path) for watching")
-            return
-        }
+        guard fd >= 0 else { print("⚠️ Could not open \(path) for watching"); return }
         fileWatcherFD = fd
 
         let source = DispatchSource.makeFileSystemObjectSource(
@@ -122,29 +144,21 @@ class AppState: ObservableObject {
             eventMask: [.write, .rename, .delete],
             queue: .global(qos: .utility)
         )
-
         source.setEventHandler { [weak self] in
             guard let self else { return }
-            // Debounce: cancel any pending reload and schedule a new one
             self.reloadWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 print("🔄 Config file changed on disk, reloading…")
                 DispatchQueue.main.async {
                     self.loadConfig()
-                    // Restart watcher: the fd may now point to a stale inode
-                    // (editors do atomic saves via write-tmp + rename)
                     self.startFileWatcher()
                 }
             }
             self.reloadWorkItem = work
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.3, execute: work)
         }
-
-        source.setCancelHandler {
-            if fd >= 0 { close(fd) }
-        }
-
+        source.setCancelHandler { if fd >= 0 { close(fd) } }
         source.resume()
         fileWatcherSource = source
         print("👁️ Watching config file: \(path)")
@@ -157,21 +171,15 @@ class AppState: ObservableObject {
         fileWatcherSource = nil
     }
 
-    deinit {
-        stopFileWatcher()
-    }
+    deinit { stopFileWatcher() }
 
-    // MARK: - Config
+    // MARK: - Config (local read for the servers panel)
 
     func loadConfig() {
-        // Ensure config directory exists
         let configDir = configURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        
         print("📁 Loading config from: \(configURL.path)")
-        
-        // Try to load existing config
-        guard let data = try? Data(contentsOf: configURL),
+        guard let data   = try? Data(contentsOf: configURL),
               let config = try? JSONDecoder().decode(ServersConfig.self, from: data)
         else {
             print("⚠️ No config found, creating default config")
@@ -183,174 +191,92 @@ class AppState: ObservableObject {
     }
 
     func saveConfig() {
-        // Ensure config directory exists
         let configDir = configURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        
-        let config = ServersConfig(mcpServers: servers)
+        let config  = ServersConfig(mcpServers: servers)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(config) else { return }
         try? data.write(to: configURL)
-        
         print("✓ Saved config to: \(configURL.path)")
     }
-    
+
     private func createDefaultConfig() {
-        // Create a sample config file with examples
         let sampleServers: [String: MCPServer] = [
             "example-filesystem": MCPServer(
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-                env: nil,
-                url: nil,
-                transport: "stdio",
-                auth: nil,
-                enabled: false
-            ),
+                env: nil, url: nil, transport: "stdio", auth: nil, enabled: false),
             "example-github": MCPServer(
                 command: "npx",
                 args: ["-y", "@modelcontextprotocol/server-github"],
                 env: ["GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here"],
-                url: nil,
-                transport: "stdio",
-                auth: nil,
-                enabled: false
-            )
+                url: nil, transport: "stdio", auth: nil, enabled: false)
         ]
-        
-        let defaultConfig = ServersConfig(mcpServers: sampleServers)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(defaultConfig) else { return }
+        guard let data = try? encoder.encode(ServersConfig(mcpServers: sampleServers)) else { return }
         try? data.write(to: configURL)
-        
-        print("✓ Created default config with examples at: \(configURL.path)")
-        
-        // Reload to show the examples
+        print("✓ Created default config at: \(configURL.path)")
         servers = sampleServers
     }
 
     // MARK: - Process
 
-    func startServer() {
-        processManager.startBundled()
-    }
-
-    func stopServer() {
-        processManager.stop()
-    }
+    func startServer() { processManager.startBundled() }
+    func stopServer()  { processManager.stop() }
 
     func restartServer() {
         processManager.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.startServer() }
     }
 
-    // MARK: - Tool Discovery
+    // MARK: - Tool Discovery (API only)
 
     func discoverTools() {
-        guard !isDiscoveringTools else { return }
+        guard !isDiscoveringTools, processManager.isRunning else { return }
         isDiscoveringTools = true
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        guard let url = URL(string: "\(apiBase)/api/tools") else {
+            isDiscoveringTools = false
+            return
+        }
+
+        // Allow enough time for all upstream MCP servers to be probed.
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 90
+
+        print("🔍 Tool discovery via API: \(url)")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
 
-            // Capture the config identity at the start to detect races with switchPreset(_:)
-            let startedConfigURL = self.configURL
-
-            guard let resourcePath = Bundle.main.resourcePath else {
+            if let error {
+                print("🔍 Tool discovery failed: \(error.localizedDescription)")
                 DispatchQueue.main.async { self.isDiscoveringTools = false }
                 return
             }
 
-            let binaryPath = (resourcePath as NSString).appendingPathComponent("jarvis")
-            guard FileManager.default.isExecutableFile(atPath: binaryPath) else {
+            guard let data,
+                  let parsed = try? JSONDecoder().decode([String: [ToolEntry]].self, from: data)
+            else {
+                print("🔍 Tool discovery: unexpected response")
                 DispatchQueue.main.async { self.isDiscoveringTools = false }
                 return
             }
 
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: binaryPath)
-            // Pass --config to honor the active preset
-            proc.arguments = ["--list-tools", "--config", startedConfigURL.path]
-            proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-            proc.environment = ProcessManager.shellEnvironment
-
-            let pipe = Pipe()
-            let errPipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = errPipe
-
-            do {
-                try proc.run()
-
-                // Read stdout and stderr concurrently to avoid deadlock
-                var stdoutData: Data?
-                var stderrData: Data?
-                let group = DispatchGroup()
-
-                group.enter()
-                DispatchQueue.global(qos: .userInitiated).async {
-                    stdoutData = pipe.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-
-                group.enter()
-                DispatchQueue.global(qos: .userInitiated).async {
-                    stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-
-                group.wait()
-                proc.waitUntilExit()
-
-                let data = stdoutData ?? Data()
-                let errData = stderrData ?? Data()
-                if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
-                    print("🔍 stderr: \(errStr)")
-                }
-
-                print("🔍 Tool discovery: exit=\(proc.terminationStatus), bytes=\(data.count)")
-
-                guard proc.terminationStatus == 0 else {
-                    print("🔍 Tool discovery failed: non-zero exit")
-                    DispatchQueue.main.async { self.isDiscoveringTools = false }
-                    return
-                }
-
-                guard let parsed = try? JSONDecoder().decode(
-                    [String: [ToolEntry]].self, from: data
-                ) else {
-                    print("🔍 Tool discovery failed: JSON decode error")
-                    if let raw = String(data: data, encoding: .utf8) {
-                        print("🔍 Raw output (first 500 chars): \(String(raw.prefix(500)))")
-                    }
-                    DispatchQueue.main.async { self.isDiscoveringTools = false }
-                    return
-                }
-
-                let tools = parsed.mapValues { entries in
-                    entries.map { DiscoveredTool(name: $0.name, description: $0.description) }
-                }
-                for (server, list) in tools.sorted(by: { $0.key < $1.key }) {
-                    print("🔍 \(server): \(list.count) tools")
-                }
-
-                DispatchQueue.main.async {
-                    // Guard against race: if switchPreset(_:) changed configURL while the subprocess ran,
-                    // discard stale results so an old probe cannot overwrite a newer preset's tool list
-                    guard self.configURL == startedConfigURL else {
-                        self.isDiscoveringTools = false
-                        return
-                    }
-                    self.discoveredTools = tools
-                    self.isDiscoveringTools = false
-                }
-            } catch {
-                print("🔍 Tool discovery error: \(error)")
-                DispatchQueue.main.async { self.isDiscoveringTools = false }
+            let tools = parsed.mapValues { entries in
+                entries.map { DiscoveredTool(name: $0.name, description: $0.description) }
             }
-        }
+            for (server, list) in tools.sorted(by: { $0.key < $1.key }) {
+                print("🔍 \(server): \(list.count) tools")
+            }
+
+            DispatchQueue.main.async {
+                self.discoveredTools = tools
+                self.isDiscoveringTools = false
+            }
+        }.resume()
     }
 
     func isToolDisabled(server: String, tool: String) -> Bool {
@@ -358,71 +284,150 @@ class AppState: ObservableObject {
     }
 
     func toggleTool(server: String, tool: String) {
-        if servers[server]?.disabledTools == nil {
-            servers[server]?.disabledTools = []
-        }
+        if servers[server]?.disabledTools == nil { servers[server]?.disabledTools = [] }
         if let idx = servers[server]?.disabledTools?.firstIndex(of: tool) {
             servers[server]?.disabledTools?.remove(at: idx)
         } else {
             servers[server]?.disabledTools?.append(tool)
         }
-        if servers[server]?.disabledTools?.isEmpty == true {
-            servers[server]?.disabledTools = nil
-        }
-        // Mark server as requiring restart since jarvis.py's _disabled_tools snapshot is immutable
+        if servers[server]?.disabledTools?.isEmpty == true { servers[server]?.disabledTools = nil }
         servers[server]?.requiresRestart = true
         saveConfig()
     }
 
-    /// Activates the given preset, or reverts to the default config if `preset` is `nil`.
-    /// Reloads the server config immediately; if the server was running it is restarted
-    /// asynchronously (with a short delay — the restart may race on slow machines).
-    func switchPreset(_ preset: Preset?) {
-        let wasRunning = processManager.isRunning || processManager.isStarting
-        activePresetID = preset?.id
-        loadConfig()
-        startFileWatcher() // Re-watch the new config path
-        if wasRunning {
-            restartServer()
+    // MARK: - Preset API
+
+    /// Fetch the current preset list from the server and sync local state.
+    func fetchPresets() {
+        guard let url = URL(string: "\(apiBase)/api/presets") else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self,
+                  let data,
+                  let response = try? JSONDecoder().decode(PresetsResponse.self, from: data)
+            else { return }
+            let activeID = response.activePresetID.flatMap { UUID(uuidString: $0) }
+            DispatchQueue.main.async {
+                self.presets        = response.presets
+                self.activePresetID = activeID
+                self.loadConfig()
+                self.startFileWatcher()
+            }
+        }.resume()
+    }
+
+    /// Add a new preset.  Calls POST /api/presets and updates local state on success.
+    func addPreset(name: String, filePath: String, completion: ((Bool) -> Void)? = nil) {
+        guard !filePath.isEmpty,
+              let url = URL(string: "\(apiBase)/api/presets")
+        else { completion?(false); return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["name": name.isEmpty
+            ? URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
+            : name, "filePath": filePath])
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self,
+                  let data,
+                  let r = try? JSONDecoder().decode(CreatePresetResponse.self, from: data)
+            else { completion?(false); return }
+            DispatchQueue.main.async {
+                self.presets.append(r.preset)
+                completion?(true)
+            }
+        }.resume()
+    }
+
+    /// Remove a preset.  Calls DELETE /api/presets/{id} and updates local state.
+    func removePreset(_ preset: Preset, completion: ((Bool) -> Void)? = nil) {
+        guard let url = URL(string: "\(apiBase)/api/presets/\(preset.id)") else {
+            completion?(false); return
         }
-    }
-
-    func addPreset(name: String, filePath: String) {
-        guard !filePath.isEmpty else { return }
-        let preset = Preset(name: name.isEmpty ? URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent : name,
-                            filePath: filePath)
-        presets.append(preset)
-    }
-
-    func removePreset(_ preset: Preset) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
         let wasActive = activePresetID == preset.id
-        presets.removeAll { $0.id == preset.id }
-        if wasActive {
-            switchPreset(nil)
+
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            guard let self,
+                  let http = response as? HTTPURLResponse, http.statusCode == 200
+            else { completion?(false); return }
+            DispatchQueue.main.async {
+                self.presets.removeAll { $0.id == preset.id }
+                if wasActive {
+                    self.activePresetID = nil
+                    self.loadConfig()
+                    self.startFileWatcher()
+                    if self.processManager.isRunning || self.processManager.isStarting {
+                        self.restartServer()
+                    }
+                }
+                completion?(true)
+            }
+        }.resume()
+    }
+
+    /// Rename a preset.  Calls PATCH /api/presets/{id}.
+    func renamePreset(id: UUID, to name: String) {
+        guard let url = URL(string: "\(apiBase)/api/presets/\(id)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["name": name])
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+
+            // Decode response and update local state
+            if let error {
+                print("⚠️ Failed to rename preset: \(error.localizedDescription)")
+                return
+            }
+
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                print("⚠️ Rename preset failed with non-200 response")
+                return
+            }
+
+            // Decode the returned preset (server returns {"preset": {...}})
+            if let data,
+               let decoded = try? JSONDecoder().decode([String: Preset].self, from: data),
+               let updatedPreset = decoded["preset"] {
+                DispatchQueue.main.async {
+                    if let idx = self.presets.firstIndex(where: { $0.id == id }) {
+                        self.presets[idx] = updatedPreset
+                    }
+                }
+            }
+        }.resume()
+    }
+
+    /// Activate a preset (or nil for default).  Calls POST /api/presets/{id}/activate,
+    /// updates local state, then restarts the server so it picks up the new config.
+    func switchPreset(_ preset: Preset?, completion: ((Bool) -> Void)? = nil) {
+        let path: String
+        if let preset {
+            path = "\(apiBase)/api/presets/\(preset.id)/activate"
+        } else {
+            path = "\(apiBase)/api/presets/default/activate"
         }
-    }
+        guard let url = URL(string: path) else { completion?(false); return }
 
-    // MARK: - Preset Persistence
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let wasRunning = processManager.isRunning || processManager.isStarting
 
-    private func savePresets(_ presetsToSave: [Preset]) {
-        if let data = try? JSONEncoder().encode(presetsToSave) {
-            UserDefaults.standard.set(data, forKey: "presets")
-        }
-    }
-
-    private func saveActivePresetID() {
-        UserDefaults.standard.set(activePresetID?.uuidString, forKey: "activePresetID")
-    }
-
-    private static func loadPresets() -> [Preset] {
-        guard let data = UserDefaults.standard.data(forKey: "presets"),
-              let presets = try? JSONDecoder().decode([Preset].self, from: data)
-        else { return [] }
-        return presets
-    }
-
-    private static func loadActivePresetID() -> UUID? {
-        guard let str = UserDefaults.standard.string(forKey: "activePresetID") else { return nil }
-        return UUID(uuidString: str)
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            guard let self,
+                  let http = response as? HTTPURLResponse, http.statusCode == 200
+            else { completion?(false); return }
+            DispatchQueue.main.async {
+                self.activePresetID = preset?.id
+                self.loadConfig()
+                self.startFileWatcher()
+                if wasRunning { self.restartServer() }
+                completion?(true)
+            }
+        }.resume()
     }
 }
