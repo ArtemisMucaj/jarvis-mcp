@@ -183,10 +183,10 @@ class MCPManagerApp(App[None]):
     @work
     async def _probe_all(self) -> None:
         """Probe all enabled servers in the background (runs in app event loop)."""
-        from jarvis import _load_raw_config, _probe_server
+        from jarvis import load_raw_config, probe_server
 
         try:
-            _, raw_servers = _load_raw_config(self.config_path)
+            _, raw_servers = load_raw_config(self.config_path)
         except Exception as exc:
             self._set_status(f"Config error: {exc}")
             return
@@ -201,7 +201,7 @@ class MCPManagerApp(App[None]):
         async def probe_one(name: str, raw: dict) -> None:
             nonlocal done
             try:
-                tools = await asyncio.wait_for(_probe_server(name, raw), timeout=30)
+                tools = await asyncio.wait_for(probe_server(name, raw), timeout=30)
             except Exception:
                 tools = []
             self._update_server_tools(name, tools)
