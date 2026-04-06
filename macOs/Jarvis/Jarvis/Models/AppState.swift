@@ -254,6 +254,10 @@ class AppState: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
+
+            // Capture the config identity at the start to detect races with switchPreset(_:)
+            let startedConfigURL = self.configURL
+
             guard let resourcePath = Bundle.main.resourcePath else {
                 DispatchQueue.main.async { self.isDiscoveringTools = false }
                 return
@@ -268,7 +272,7 @@ class AppState: ObservableObject {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: binaryPath)
             // Pass --config to honor the active preset
-            proc.arguments = ["--list-tools", "--config", self.configURL.path]
+            proc.arguments = ["--list-tools", "--config", startedConfigURL.path]
             proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
             proc.environment = ProcessManager.shellEnvironment
 
@@ -333,6 +337,12 @@ class AppState: ObservableObject {
                 }
 
                 DispatchQueue.main.async {
+                    // Guard against race: if switchPreset(_:) changed configURL while the subprocess ran,
+                    // discard stale results so an old probe cannot overwrite a newer preset's tool list
+                    guard self.configURL == startedConfigURL else {
+                        self.isDiscoveringTools = false
+                        return
+                    }
                     self.discoveredTools = tools
                     self.isDiscoveringTools = false
                 }
