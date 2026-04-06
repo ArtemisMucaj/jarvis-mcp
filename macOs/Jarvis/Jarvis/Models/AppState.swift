@@ -248,15 +248,91 @@ class AppState: ObservableObject {
 
     // MARK: - Tool Discovery
 
+    /// API port is always MCP port + 1 (matches jarvis.py _start_api_thread).
+    private var apiPort: Int { port + 1 }
+
     func discoverTools() {
         guard !isDiscoveringTools else { return }
         isDiscoveringTools = true
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Capture the config identity now to detect races with switchPreset(_:).
+        let startedConfigURL = self.configURL
+
+        // Prefer the HTTP API when the server is already running — no subprocess
+        // cold-start, no process spawning, instant response.
+        if processManager.isRunning {
+            discoverToolsViaAPI(startedConfigURL: startedConfigURL)
+        } else {
+            discoverToolsViaSubprocess(startedConfigURL: startedConfigURL)
+        }
+    }
+
+    /// Fetch tool catalogue from the REST API exposed by the running jarvis server.
+    /// Falls back to the subprocess approach on any error.
+    private func discoverToolsViaAPI(startedConfigURL: URL) {
+        let encodedPath = startedConfigURL.path
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? startedConfigURL.path
+        let urlString = "http://127.0.0.1:\(apiPort)/api/tools?config=\(encodedPath)"
+
+        guard let url = URL(string: urlString) else {
+            discoverToolsViaSubprocess(startedConfigURL: startedConfigURL)
+            return
+        }
+
+        print("🔍 Tool discovery via API: \(urlString)")
+
+        // Short timeout — if the server isn't ready yet we fall back quickly.
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
 
-            // Capture the config identity at the start to detect races with switchPreset(_:)
-            let startedConfigURL = self.configURL
+            if let error {
+                print("🔍 API unavailable (\(error.localizedDescription)), falling back to subprocess")
+                self.discoverToolsViaSubprocess(startedConfigURL: startedConfigURL)
+                return
+            }
+
+            guard
+                let httpResponse = response as? HTTPURLResponse,
+                httpResponse.statusCode == 200,
+                let data
+            else {
+                print("🔍 API returned unexpected response, falling back to subprocess")
+                self.discoverToolsViaSubprocess(startedConfigURL: startedConfigURL)
+                return
+            }
+
+            guard let parsed = try? JSONDecoder().decode([String: [ToolEntry]].self, from: data) else {
+                print("🔍 API JSON decode error, falling back to subprocess")
+                self.discoverToolsViaSubprocess(startedConfigURL: startedConfigURL)
+                return
+            }
+
+            let tools = parsed.mapValues { entries in
+                entries.map { DiscoveredTool(name: $0.name, description: $0.description) }
+            }
+            for (server, list) in tools.sorted(by: { $0.key < $1.key }) {
+                print("🔍 API \(server): \(list.count) tools")
+            }
+
+            DispatchQueue.main.async {
+                guard self.configURL == startedConfigURL else {
+                    self.isDiscoveringTools = false
+                    return
+                }
+                self.discoveredTools = tools
+                self.isDiscoveringTools = false
+            }
+        }.resume()
+    }
+
+    /// Spawn the bundled jarvis binary with --list-tools to discover tools.
+    /// Used when the HTTP server is not yet running (e.g. first launch).
+    private func discoverToolsViaSubprocess(startedConfigURL: URL) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
 
             guard let resourcePath = Bundle.main.resourcePath else {
                 DispatchQueue.main.async { self.isDiscoveringTools = false }
@@ -271,7 +347,6 @@ class AppState: ObservableObject {
 
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: binaryPath)
-            // Pass --config to honor the active preset
             proc.arguments = ["--list-tools", "--config", startedConfigURL.path]
             proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
             proc.environment = ProcessManager.shellEnvironment
@@ -284,7 +359,6 @@ class AppState: ObservableObject {
             do {
                 try proc.run()
 
-                // Read stdout and stderr concurrently to avoid deadlock
                 var stdoutData: Data?
                 var stderrData: Data?
                 let group = DispatchGroup()
@@ -310,7 +384,7 @@ class AppState: ObservableObject {
                     print("🔍 stderr: \(errStr)")
                 }
 
-                print("🔍 Tool discovery: exit=\(proc.terminationStatus), bytes=\(data.count)")
+                print("🔍 Tool discovery (subprocess): exit=\(proc.terminationStatus), bytes=\(data.count)")
 
                 guard proc.terminationStatus == 0 else {
                     print("🔍 Tool discovery failed: non-zero exit")
@@ -333,12 +407,10 @@ class AppState: ObservableObject {
                     entries.map { DiscoveredTool(name: $0.name, description: $0.description) }
                 }
                 for (server, list) in tools.sorted(by: { $0.key < $1.key }) {
-                    print("🔍 \(server): \(list.count) tools")
+                    print("🔍 subprocess \(server): \(list.count) tools")
                 }
 
                 DispatchQueue.main.async {
-                    // Guard against race: if switchPreset(_:) changed configURL while the subprocess ran,
-                    // discard stale results so an old probe cannot overwrite a newer preset's tool list
                     guard self.configURL == startedConfigURL else {
                         self.isDiscoveringTools = false
                         return
