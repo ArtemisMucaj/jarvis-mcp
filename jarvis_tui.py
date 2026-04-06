@@ -346,7 +346,7 @@ class AuthManagerApp(App[None]):
     def _count_token_files(self) -> int:
         """Count non-config files in TOKEN_DIR (heuristic for token presence)."""
         token_dir = Path.home() / ".jarvis"
-        excluded = {"servers.json", "jarvis.log"}
+        excluded = {"servers.json", "presets.json", "jarvis.log"}
         try:
             return sum(
                 1
@@ -383,7 +383,11 @@ class AuthManagerApp(App[None]):
         # Suspend the TUI so the browser/callback interaction has a clean terminal
         async with self.suspend():
             result = subprocess.run(
-                [sys.executable, str(jarvis_script), "--auth", server],
+                [
+                    sys.executable, str(jarvis_script),
+                    "--config", str(self.config_path),
+                    "--auth", server,
+                ],
             )
 
         if result.returncode == 0:
@@ -394,7 +398,7 @@ class AuthManagerApp(App[None]):
     def action_logout(self) -> None:
         """Delete all non-config files from TOKEN_DIR (clears all OAuth tokens)."""
         token_dir = Path.home() / ".jarvis"
-        excluded = {"servers.json", "jarvis.log"}
+        excluded = {"servers.json", "presets.json", "jarvis.log"}
         cleared = 0
         errors = 0
         try:

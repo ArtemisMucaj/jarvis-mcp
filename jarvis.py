@@ -322,7 +322,6 @@ def create_api_app(default_config_path: Path, mcp_port: int):
             Route("/api/presets/{id}", update_preset, methods=["PATCH"]),
             Route("/api/presets/{id}", delete_preset, methods=["DELETE"]),
             Route("/api/presets/{id}/activate", activate_preset, methods=["POST"]),
-            Route("/api/presets/default/activate", activate_preset, methods=["POST"]),
         ]
     )
 
