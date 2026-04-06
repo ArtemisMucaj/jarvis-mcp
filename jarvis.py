@@ -253,10 +253,20 @@ def _start_api_thread(config_path: Path, mcp_port: int, api_port: int) -> None:
 if __name__ == "__main__":
     import asyncio
 
-    # Resolve the default config path
+    # ── Resolve config path (global --config flag applies to every mode) ──────
     _default_config = Path.home() / ".jarvis" / "servers.json"
     if not _default_config.exists():
         _default_config = Path(__file__).parent / "servers.json"
+
+    if "--config" in sys.argv:
+        _idx = sys.argv.index("--config")
+        if _idx + 1 < len(sys.argv):
+            _override = Path(sys.argv[_idx + 1])
+            if _override.exists():
+                _default_config = _override
+            else:
+                print(f"Error: config file not found: {sys.argv[_idx + 1]}", file=sys.stderr)
+                sys.exit(1)
 
     # ── Positional subcommands (TUI modes, no MCP proxy needed) ──────────────
     _subcmd = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else None
@@ -273,15 +283,7 @@ if __name__ == "__main__":
 
     # ── --list-tools: probe only, no proxy ───────────────────────────────────
     if "--list-tools" in sys.argv:
-        _probe_config = _default_config
-        if "--config" in sys.argv:
-            idx = sys.argv.index("--config")
-            if idx + 1 < len(sys.argv):
-                override = Path(sys.argv[idx + 1])
-                if override.exists():
-                    _probe_config = override
-
-        _, _raw_servers = _load_raw_config(_probe_config)
+        _, _raw_servers = _load_raw_config(_default_config)
 
         async def _discover() -> None:
             result = await _probe_all_servers(_raw_servers)
