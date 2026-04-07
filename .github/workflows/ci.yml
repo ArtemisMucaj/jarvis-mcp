@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+
+  build-jarvis-macos:
+    name: Build jarvis binary (macOS arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Build jarvis binary
+        run: bash scripts/build_jarvis_binary.sh
+
+  build-jarvis-linux:
+    name: Build jarvis binary (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Build jarvis binary
+        run: bash scripts/build_jarvis_binary_linux.sh
