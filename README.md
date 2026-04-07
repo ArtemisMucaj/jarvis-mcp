@@ -1,6 +1,10 @@
 # Jarvis
 
-MCP proxy that aggregates multiple MCP servers behind 2 synthetic tools (`search_tools` + `call_tool`) using [FastMCP](https://gofastmcp.com). This eliminates context bloat in LLM agents.
+Your agent knows about 200 tools. It uses 5. The other 195 are just burning context on every single request.
+
+Jarvis fixes that. It proxies all your MCP servers behind a single endpoint and exposes just **2 tools** to the agent — `search_tools` and `call_tool`. The agent describes what it wants in plain language, gets back the top matching tools with full schemas, and calls the right one. You can connect 10 servers and 300 tools; the agent still sees 2.
+
+For agents that need to do more in fewer round-trips, Jarvis also ships **Code Mode**: instead of searching and calling tools one at a time, the agent writes a small sandboxed Python script that batches multiple tool calls in a single step. Less back-and-forth, more done per turn.
 
 ## Install
 
@@ -8,11 +12,9 @@ MCP proxy that aggregates multiple MCP servers behind 2 synthetic tools (`search
 
 Download `Jarvis-<version>.dmg` from the [latest release](https://github.com/ArtemisMucaj/jarvis-mcp/releases/latest), open it, and drag **Jarvis** to `/Applications`.
 
-The app is ad-hoc signed. On first launch macOS may show a Gatekeeper warning — right-click the app and choose **Open** to bypass it.
+On first launch macOS may show a Gatekeeper warning — right-click the app and choose **Open** to bypass it. No Python or additional dependencies required.
 
-No Python or `uv` installation required. The app bundles its own self-contained `jarvis` binary.
-
-### Standalone binary (Linux / headless macOS)
+### Standalone binary
 
 Download the binary for your platform from the [latest release](https://github.com/ArtemisMucaj/jarvis-mcp/releases/latest):
 
@@ -26,81 +28,17 @@ chmod +x jarvis-<version>-linux-x86_64
 ./jarvis-<version>-linux-x86_64 --http 7070
 ```
 
-### From source (requires Python 3.11+ and uv)
+### From source
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv run python -m jarvis --http 7070
 ```
 
-## Configuration
+## Connecting your agent
 
-Jarvis reads server config from `~/.jarvis/servers.json`. The format follows the standard MCP config:
-
-```json
-{
-  "mcpServers": {
-    "my-server": {
-      "url": "https://example.com/mcp",
-      "transport": "http"
-    }
-  }
-}
-```
-
-For stdio servers:
-
-```json
-{
-  "mcpServers": {
-    "my-tool": {
-      "command": "npx",
-      "args": ["-y", "@some/mcp-server"],
-      "transport": "stdio"
-    }
-  }
-}
-```
-
-For OAuth servers (e.g. Atlassian, GitLab), add `"auth": "oauth"` — Jarvis automatically wires in persistent token storage.
-
-Environment variables can be referenced with `${VAR}` syntax in `env` values (e.g. `"${GITLAB_TOKEN}"`).
-
-Servers with `"enabled": false` are loaded but not started.
-
-Use `"disabledTools"` to suppress individual tools from a server without disabling it entirely:
-
-```json
-{
-  "mcpServers": {
-    "my-tool": {
-      "command": "npx",
-      "args": ["-y", "@some/mcp-server"],
-      "transport": "stdio",
-      "disabledTools": ["dangerous_tool", "another_tool"]
-    }
-  }
-}
-```
-
-Disabled tools are excluded from BM25 search results and cannot be called through Jarvis. You can also manage enabled servers and disabled tools interactively with `jarvis mcp` (see [TUI](#tui)).
-
-## macOS app
-
-Jarvis ships as a native macOS menu bar app (SwiftUI). It keeps the proxy running as a persistent HTTP server, eliminating cold-start latency.
-
-### Features
-
-- **Menu bar icon** — coloured when running, dimmed when stopped; quick access to start/stop, copy endpoint, and open the main window
-- **Server list** — browse, enable/disable, and inspect all configured MCP servers
-- **One-click start/stop** — launch the proxy from the toolbar or the menu bar popover
-- **Preset config switcher** — save and switch between multiple `servers.json` files (e.g. work, personal, testing)
-- **Inline log viewer** — tail `~/.jarvis/jarvis.log` in real-time directly in the Presets panel
-- **System notifications** — notified when the server becomes ready
-- **Settings** — configure the HTTP port (default: `7070`) and toggle **Code Mode**
-
-### Connecting agents
-
-Once the app is running, point your agent at the HTTP endpoint:
+Point your agent at the Jarvis HTTP endpoint:
 
 ```json
 {
@@ -113,142 +51,157 @@ Once the app is running, point your agent at the HTTP endpoint:
 }
 ```
 
-The port is configurable in Settings.
+The port is configurable (default `7070`).
 
-## CLI usage
+## Configuration
 
-You can run Jarvis directly from the command line (requires `uv`).
+Jarvis reads from `~/.jarvis/servers.json`. The format follows the standard MCP config schema.
 
-### stdio (default)
-
-```bash
-uv run python -m jarvis
+**HTTP server:**
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "url": "https://example.com/mcp",
+      "transport": "http"
+    }
+  }
+}
 ```
 
-### HTTP server
-
-```bash
-uv run python -m jarvis --http 7070
+**stdio server:**
+```json
+{
+  "mcpServers": {
+    "my-tool": {
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"]
+    }
+  }
+}
 ```
 
-### Specifying a config file
-
-Override the active config file with `--config`:
-
-```bash
-uv run python -m jarvis --config /path/to/servers.json --http 7070
+**OAuth server:**
+```json
+{
+  "mcpServers": {
+    "atlassian": {
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "transport": "http",
+      "auth": "oauth"
+    }
+  }
+}
 ```
 
-When `--config` is omitted, Jarvis resolves the config in this priority order:
-1. Active preset from `~/.jarvis/presets.json`
-2. `~/.jarvis/servers.json`
-3. `servers.json` in the repo root directory
+**Disable a server** without removing it:
+```json
+{ "enabled": false }
+```
 
-### List available tools
+**Disable individual tools** from a server:
+```json
+{ "disabledTools": ["dangerous_tool", "noisy_tool"] }
+```
 
-Probe all configured servers and print every tool as JSON, then exit:
+**Environment variable substitution** in `env` values:
+```json
+{ "env": { "API_KEY": "${MY_API_KEY}" } }
+```
+
+## Managing servers and tools
+
+### macOS app
+
+The menu bar app keeps Jarvis running as a persistent HTTP server. From the menu bar icon you can start/stop the server, copy the endpoint URL, and open the main window to browse servers, switch presets, and tail the log.
+
+### TUI
+
+Two terminal UIs are available for interactive management.
+
+**Browse and toggle servers and tools:**
+```bash
+jarvis mcp
+```
+Opens a tree of all configured servers and their tools. `Space` to enable/disable, `r` to re-probe, `q` to save and quit.
+
+**Manage OAuth authentication:**
+```bash
+jarvis auth
+```
+Lists all servers and their auth status. `l` to trigger the OAuth login flow for the selected server (opens the browser), `x` to clear all cached tokens.
+
+## OAuth authentication
+
+Servers with `"auth": "oauth"` require a one-time browser login. Use the `auth` TUI (above), or authenticate from the CLI:
 
 ```bash
-uv run python -m jarvis --list-tools
+# All OAuth servers
+jarvis --auth
+
+# Specific server
+jarvis --auth atlassian
 ```
+
+Tokens are stored in `~/.jarvis/` and reused automatically on subsequent runs.
+
+## Modes
+
+### Default — BM25 search
+
+The agent uses `search_tools` to find relevant tools by natural language query, then `call_tool` to invoke them. Keeps context minimal regardless of how many tools are configured.
 
 ### Code Mode
 
-By default Jarvis uses BM25 search to surface relevant tools. Pass `--code-mode` to switch to FastMCP's Code Mode, where the LLM writes sandboxed Python scripts that batch multiple tool calls in a single step:
+Instead of searching one tool at a time, the agent writes a sandboxed Python script that batches multiple tool calls in a single step. Useful for tasks that require many sequential tool interactions.
 
 ```bash
-uv run python -m jarvis --http 7070 --code-mode
+jarvis --http 7070 --code-mode
 ```
 
-Code Mode can also be toggled in the macOS app under **Settings**.
+Can also be toggled in the macOS app under **Settings**.
 
-### OAuth authentication
-
-Servers with `"auth": "oauth"` require a one-time browser login. Authenticate all OAuth servers at once:
-
-```bash
-uv run python -m jarvis --auth
-```
-
-Or target a specific server by name:
-
-```bash
-uv run python -m jarvis --auth my-server
-```
-
-Tokens are persisted to `~/.jarvis/` and reused automatically on subsequent runs.
-
-## TUI
-
-Jarvis ships a terminal UI (powered by [Textual](https://textual.textualize.io/)) for interactive management.
-
-### Manage servers and tools
-
-```bash
-uv run python -m jarvis mcp
-```
-
-Opens a tree view of all configured servers and their tools. Use **Space** to enable/disable a server or an individual tool, **r** to re-probe servers, and **q** to save changes and quit.
-
-### Manage OAuth authentication
-
-```bash
-uv run python -m jarvis auth
-```
-
-Opens a table of all configured servers and their auth type. Use **l** to trigger the OAuth login flow for the selected server (opens the browser) and **x** to clear all cached tokens.
-
-## How it works
-
-Jarvis exposes only 2 tools to the agent regardless of how many MCP servers are configured. Two modes are available:
-
-### Default mode (BM25 search)
+## CLI reference
 
 ```
-Agent sees: search_tools + call_tool (2 tools, ~50 tokens)
+Usage: jarvis [--config PATH] [COMMAND] [OPTIONS]
 
-Agent wants to create a GitLab MR:
-  -> search_tools("create merge request")
-  -> BM25 returns top 5 matching tools with full schemas
-  -> call_tool("gitlab_create_merge_request", {...})
-  -> Jarvis proxies the call to the GitLab MCP server
+Commands:
+  mcp               Browse and toggle MCP servers and tools (TUI)
+  auth              Manage OAuth authentication for MCP servers (TUI)
+
+Options:
+  --config PATH     Use a specific config file
+  --http PORT       Run as an HTTP server on PORT (management UI)
+  --auth [SERVER]   Authenticate with all servers or a specific one
+  --code-mode       Enable code mode transform
+  --help, -h        Show this message and exit
+
+With no command or options, runs as a stdio MCP server.
 ```
 
-### Code Mode (`--code-mode`)
-
-Instead of searching and calling tools one at a time, the LLM writes a sandboxed Python script that batches multiple tool calls in a single step. Useful when a task requires many sequential tool interactions.
-
-```
-Agent sees: run_python_code (1 tool)
-
-Agent wants to create a GitLab MR and post a comment:
-  -> run_python_code("""
-       result = gitlab_create_merge_request(title="feat: ...", ...)
-       gitlab_create_note(mr_iid=result["iid"], body="Ready for review")
-     """)
-  -> Jarvis executes both calls and returns the combined result
-```
+**Config resolution order** (when `--config` is not passed):
+1. Active preset from `~/.jarvis/presets.json`
+2. `~/.jarvis/servers.json`
 
 ## REST API
 
-When running in HTTP mode (`--http PORT`), Jarvis starts a companion REST API on `PORT + 1` (default `7071`). All endpoints are bound to `127.0.0.1`.
+When running with `--http PORT`, a companion REST API starts on `PORT + 1` (default `7071`), bound to `127.0.0.1`. The macOS app uses this internally.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | Returns `{"status":"ok","mcp_port":…,"api_port":…}` |
-| GET | `/api/tools[?config=PATH]` | Probe all servers and return the full tool catalogue |
-| GET | `/api/config[?path=PATH]` | Read the active `servers.json` |
-| PUT | `/api/config[?path=PATH]` | Overwrite `servers.json` with the request body |
-| POST | `/api/servers/{name}/toggle` | Enable/disable a server — body `{"enabled": bool}` |
-| POST | `/api/tools/toggle` | Enable/disable a tool — body `{"server": "…", "tool": "…", "enabled": bool}` |
-| GET | `/api/presets` | List all presets and the active preset ID |
-| POST | `/api/presets` | Create a preset — body `{"name": "…", "filePath": "…"}` |
-| PATCH | `/api/presets/{id}` | Rename or change the file path of a preset |
+| GET | `/api/health` | Server status and ports |
+| GET | `/api/tools` | Probe all servers, return full tool catalogue |
+| GET | `/api/config` | Read active `servers.json` |
+| PUT | `/api/config` | Overwrite `servers.json` |
+| POST | `/api/servers/{name}/toggle` | Enable/disable a server — `{"enabled": bool}` |
+| POST | `/api/tools/toggle` | Enable/disable a tool — `{"server", "tool", "enabled"}` |
+| GET | `/api/presets` | List presets and active preset ID |
+| POST | `/api/presets` | Create a preset — `{"name", "filePath"}` |
+| PATCH | `/api/presets/{id}` | Rename or update a preset |
 | DELETE | `/api/presets/{id}` | Delete a preset |
 | POST | `/api/presets/{id}/activate` | Switch to a preset |
-| POST | `/api/presets/default/activate` | Revert to the default `~/.jarvis/servers.json` |
-
-The macOS app uses this API internally for its server list and preset switcher.
+| POST | `/api/presets/default/activate` | Revert to `~/.jarvis/servers.json` |
 
 ## File locations
 
@@ -256,29 +209,18 @@ The macOS app uses this API internally for its server list and preset switcher.
 |---|---|
 | Server config | `~/.jarvis/servers.json` |
 | Preset list | `~/.jarvis/presets.json` |
-| OAuth tokens | `~/.jarvis/` |
+| OAuth tokens | `~/.jarvis/cache.db` |
 | Logs | `~/.jarvis/jarvis.log` |
 
 ## Building from source
 
-### macOS app
-
 ```bash
-# Build the bundled jarvis binary first
-bash scripts/build_jarvis_binary.sh
+# Binary only
+bash scripts/build_jarvis_binary.sh        # macOS → macOs/Jarvis/Jarvis/Resources/jarvis
+bash scripts/build_jarvis_binary_linux.sh  # Linux → dist/jarvis
 
-# Then build the Xcode project
+# macOS app (build binary first)
 xcodebuild -project macOs/Jarvis/Jarvis.xcodeproj -scheme Jarvis -configuration Debug build
 ```
 
-### Standalone binary
-
-```bash
-# macOS
-bash scripts/build_jarvis_binary.sh        # output: macOs/Jarvis/Jarvis/Resources/jarvis
-
-# Linux
-bash scripts/build_jarvis_binary_linux.sh  # output: dist/jarvis
-```
-
-Requires `uv` (build-time only). PyInstaller 6.19.0 is fetched automatically via `uv run --with`.
+Requires `uv` at build time. PyInstaller 6.19.0 is fetched automatically.
