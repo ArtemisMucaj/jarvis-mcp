@@ -204,13 +204,12 @@ def create_api_app(
     POST /api/presets/default/activate     → revert to default
     """
     from starlette.applications import Starlette
+    from starlette.exceptions import HTTPException
     from starlette.requests import Request
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
     def resolve_config(request: Request, param: str = "config") -> Path:
-        from starlette.exceptions import HTTPException
-
         override = request.query_params.get(param)
         if not override:
             return default_config_path
@@ -569,13 +568,22 @@ if __name__ == "__main__":
         mcp.add_transform(
             CodeMode() if code_mode else BM25SearchTransform(max_results=5)
         )
-        main_loop = asyncio.get_event_loop()
-        start_api_thread(
-            config_path, port, port + 1, mcp_server=mcp, main_loop=main_loop
-        )
-        mcp.run(
-            transport="streamable-http", host="127.0.0.1", port=port, show_banner=False
-        )
+
+        async def _run_http() -> None:
+            # Capture the running loop *inside* the async context so the API
+            # thread gets the exact loop that mcp is executing on.
+            main_loop = asyncio.get_running_loop()
+            start_api_thread(
+                config_path, port, port + 1, mcp_server=mcp, main_loop=main_loop
+            )
+            await mcp.run_async(
+                transport="streamable-http",
+                host="127.0.0.1",
+                port=port,
+                show_banner=False,
+            )
+
+        asyncio.run(_run_http())
 
     else:
         mcp.add_transform(

@@ -5,6 +5,7 @@ Commands
   jarvis mcp    – manage enabled/disabled servers and tools
   jarvis auth   – manage OAuth authentication for proxied MCPs
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -50,7 +51,7 @@ class MCPManagerApp(App[None]):
     """
     BINDINGS = [
         Binding("q", "quit_save", "Save & Quit"),
-        Binding("space", "toggle_item", "Toggle"),
+        Binding("space", "toggle_item", "Toggle", priority=True),
         Binding("r", "refresh", "Re-probe"),
     ]
 
@@ -360,7 +361,11 @@ class AuthManagerApp(App[None]):
             auth = srv.get("auth", "")
             auth_label = auth.upper() if auth else "—"
             if auth == "oauth":
-                status = f"{token_count} file(s) in ~/.jarvis" if token_count else "none found"
+                status = (
+                    f"{token_count} file(s) in ~/.jarvis"
+                    if token_count
+                    else "none found"
+                )
             else:
                 status = "N/A"
             table.add_row(name, auth_label, status, key=name)
@@ -382,6 +387,7 @@ class AuthManagerApp(App[None]):
             presets_file = token_dir / "presets.json"
             if presets_file.exists():
                 import json
+
                 data = json.loads(presets_file.read_text())
                 for preset in data.get("presets", []):
                     file_path = Path(preset.get("filePath", ""))
@@ -394,7 +400,9 @@ class AuthManagerApp(App[None]):
             return sum(
                 1
                 for f in token_dir.iterdir()
-                if f.is_file() and f.name not in excluded and not f.name.endswith(".log")
+                if f.is_file()
+                and f.name not in excluded
+                and not f.name.endswith(".log")
             )
         except Exception:
             return 0
@@ -429,24 +437,31 @@ class AuthManagerApp(App[None]):
                 result = subprocess.run(
                     [
                         sys.executable,
-                        "--config", str(self.config_path),
-                        "--auth", server,
+                        "--config",
+                        str(self.config_path),
+                        "--auth",
+                        server,
                     ],
                 )
             else:
                 jarvis_script = Path(__file__).with_name("jarvis.py")
                 result = subprocess.run(
                     [
-                        sys.executable, str(jarvis_script),
-                        "--config", str(self.config_path),
-                        "--auth", server,
+                        sys.executable,
+                        str(jarvis_script),
+                        "--config",
+                        str(self.config_path),
+                        "--auth",
+                        server,
                     ],
                 )
 
         if result.returncode == 0:
             self._set_status(f"✓ Authenticated '{server}' successfully.")
         else:
-            self._set_status(f"✗ Auth failed for '{server}' (exit {result.returncode}).")
+            self._set_status(
+                f"✗ Auth failed for '{server}' (exit {result.returncode})."
+            )
 
     def action_logout(self) -> None:
         """Delete all non-config files from TOKEN_DIR (clears all OAuth tokens)."""
@@ -474,7 +489,11 @@ class AuthManagerApp(App[None]):
         errors = 0
         try:
             for f in token_dir.iterdir():
-                if f.is_file() and f.name not in excluded and not f.name.endswith(".log"):
+                if (
+                    f.is_file()
+                    and f.name not in excluded
+                    and not f.name.endswith(".log")
+                ):
                     try:
                         f.unlink()
                         cleared += 1
@@ -485,7 +504,9 @@ class AuthManagerApp(App[None]):
             return
 
         if errors:
-            self._set_status(f"Cleared {cleared} token file(s); {errors} could not be removed.")
+            self._set_status(
+                f"Cleared {cleared} token file(s); {errors} could not be removed."
+            )
         else:
             self._set_status(
                 f"✓ Cleared {cleared} token file(s) from {token_dir}"

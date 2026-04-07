@@ -272,13 +272,15 @@ struct ServerDetailView: View {
         .navigationTitle(name)
         .navigationSubtitle(server.isOAuth ? "OAuth" : (server.isHTTP ? "HTTP" : "stdio"))
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    onBack?()
-                } label: {
-                    Label("All Servers", systemImage: "chevron.left")
+            if let onBack {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        onBack()
+                    } label: {
+                        Label("All Servers", systemImage: "chevron.left")
+                    }
+                    .help("Back to overview")
                 }
-                .help("Back to overview")
             }
         }
         .onChange(of: server) { newServer in
