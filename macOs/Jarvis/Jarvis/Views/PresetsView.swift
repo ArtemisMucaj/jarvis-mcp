@@ -51,6 +51,16 @@ struct PresetsView: View {
                     Text("\(state.servers.count) configured, \(state.servers.values.filter { $0.enabled ?? true }.count) enabled")
                         .foregroundStyle(.secondary)
                 }
+                let allTools = state.discoveredTools.values.flatMap { $0 }
+                let totalTools = allTools.count
+                let enabledTools = state.discoveredTools.reduce(0) { count, entry in
+                    let (serverName, tools) = entry
+                    return count + tools.filter { !state.isToolDisabled(server: serverName, tool: $0.name) }.count
+                }
+                LabeledContent("Tools") {
+                    Text("\(enabledTools)/\(totalTools) enabled")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {

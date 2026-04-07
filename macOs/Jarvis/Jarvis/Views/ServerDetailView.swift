@@ -3,6 +3,7 @@ import SwiftUI
 struct ServerDetailView: View {
     let name: String
     let server: MCPServer
+    let onBack: (() -> Void)?
     @EnvironmentObject var state: AppState
     @State private var newEnvKey = ""
     @State private var newEnvValue = ""
@@ -16,9 +17,10 @@ struct ServerDetailView: View {
     }
     @State private var argItems: [ArgItem] = []
 
-    init(name: String, server: MCPServer) {
+    init(name: String, server: MCPServer, onBack: (() -> Void)? = nil) {
         self.name = name
         self.server = server
+        self.onBack = onBack
         _stagedServer = State(initialValue: server)
         _argItems = State(initialValue: (server.args ?? []).map { ArgItem(id: UUID(), value: $0) })
     }
@@ -269,6 +271,16 @@ struct ServerDetailView: View {
         .formStyle(.grouped)
         .navigationTitle(name)
         .navigationSubtitle(server.isOAuth ? "OAuth" : (server.isHTTP ? "HTTP" : "stdio"))
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    onBack?()
+                } label: {
+                    Label("All Servers", systemImage: "chevron.left")
+                }
+                .help("Back to overview")
+            }
+        }
         .onChange(of: server) { newServer in
             // Sync stagedServer when the authoritative server changes externally
             // (e.g., from file watcher, preset switch, or tool toggle)

@@ -6,7 +6,7 @@ struct ServersConfig: Codable {
     var mcpServers: [String: MCPServer]
 }
 
-struct MCPServer: Codable {
+struct MCPServer: Codable, Equatable {
     // stdio transport
     var command: String?
     var args: [String]?

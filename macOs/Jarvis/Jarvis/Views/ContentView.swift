@@ -13,7 +13,7 @@ struct ContentView: View {
             serverList
         } detail: {
             if let name = selectedServer, let server = state.servers[name] {
-                ServerDetailView(name: name, server: server)
+                ServerDetailView(name: name, server: server, onBack: { selectedServer = nil })
                     .id(name)
             } else {
                 PresetsView()

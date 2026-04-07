@@ -43,6 +43,7 @@ logging.getLogger("fastmcp.client.transports.config").addFilter(
 
 # ── Preset management ─────────────────────────────────────────────────────────
 
+
 def load_presets() -> dict:
     """Load ~/.jarvis/presets.json; returns empty structure if absent."""
     try:
@@ -73,6 +74,7 @@ def active_config_from_presets() -> Path:
 
 
 # ── Config utilities ──────────────────────────────────────────────────────────
+
 
 def expand_env_vars(value: str) -> str:
     """Replace ${VAR} placeholders with their os.environ values."""
@@ -127,6 +129,7 @@ def get_disabled_tools(config_path: Path) -> set[str]:
 
 # ── Server probing ────────────────────────────────────────────────────────────
 
+
 async def probe_server(name: str, raw: dict) -> list[dict[str, str]]:
     """Probe a single MCP server and return its tool list."""
     mini = MCPConfig.model_validate({"mcpServers": {name: raw}})
@@ -151,7 +154,11 @@ async def probe_all_servers(
         try:
             return await asyncio.wait_for(probe_server(name, raw), timeout=timeout)
         except Exception as exc:
-            print(f"[{name}] probe failed: {exc}", file=sys.stderr)
+            print(
+                f"[{name}] probe failed: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
             return []
 
     names = list(raw_servers.keys())
@@ -161,8 +168,26 @@ async def probe_all_servers(
 
 # ── REST API ──────────────────────────────────────────────────────────────────
 
-def create_api_app(default_config_path: Path, mcp_port: int):
+
+def create_api_app(
+    default_config_path: Path, mcp_port: int, mcp_server=None, main_loop=None
+):
     """Build a Starlette REST API app that runs alongside the MCP server.
+
+    Parameters
+    ----------
+    default_config_path : Path
+        Path to the active servers.json.
+    mcp_port : int
+        Port the MCP streamable-HTTP server is listening on.
+    mcp_server : FastMCP, optional
+        The running proxy object.  When provided, ``GET /api/tools`` calls
+        ``mcp_server.list_tools()`` on *main_loop* — no subprocess, no extra
+        HTTP round-trip.
+    main_loop : asyncio.AbstractEventLoop, optional
+        The event loop running *mcp_server*.  Required when *mcp_server* is
+        given so that the API (which runs in its own uvicorn loop) can safely
+        schedule the coroutine on the correct loop.
 
     Endpoints
     ---------
@@ -184,7 +209,8 @@ def create_api_app(default_config_path: Path, mcp_port: int):
     from starlette.routing import Route
 
     def resolve_config(request: Request, param: str = "config") -> Path:
-        from fastapi import HTTPException
+        from starlette.exceptions import HTTPException
+
         override = request.query_params.get(param)
         if not override:
             return default_config_path
@@ -208,11 +234,58 @@ def create_api_app(default_config_path: Path, mcp_port: int):
         raise HTTPException(status_code=400, detail="invalid config")
 
     async def health(request: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "mcp_port": mcp_port, "api_port": mcp_port + 1})
+        return JSONResponse(
+            {"status": "ok", "mcp_port": mcp_port, "api_port": mcp_port + 1}
+        )
 
     async def get_tools(request: Request) -> JSONResponse:
         config_path = resolve_config(request)
         try:
+            if mcp_server is not None and main_loop is not None:
+                # Ask the already-running proxy for its tool list.
+                # The proxy lives on *main_loop*; this handler runs in uvicorn's
+                # own loop, so we schedule the coroutine on the right loop and
+                # wait for the result — no subprocess, no extra HTTP hop.
+                import asyncio
+
+                future = asyncio.run_coroutine_threadsafe(
+                    mcp_server.list_tools(), main_loop
+                )
+                all_tools = future.result(timeout=30)
+
+                # Tools are named "<server>_<tool>".  Re-group them using the
+                # server names from the config (longest-first to avoid ambiguity).
+                _, raw_servers = load_raw_config(config_path)
+                server_names = sorted(raw_servers.keys(), key=len, reverse=True)
+
+                result: dict[str, list[dict[str, str]]] = {n: [] for n in server_names}
+                unmatched: list[dict[str, str]] = []
+
+                for tool in all_tools:
+                    matched = False
+                    for sname in server_names:
+                        prefix = f"{sname}_"
+                        if tool.name.startswith(prefix):
+                            result[sname].append(
+                                {
+                                    "name": tool.name[len(prefix) :],
+                                    "description": tool.description or "",
+                                }
+                            )
+                            matched = True
+                            break
+                    if not matched:
+                        unmatched.append(
+                            {"name": tool.name, "description": tool.description or ""}
+                        )
+
+                if unmatched:
+                    result["_other"] = unmatched
+
+                return JSONResponse(result)
+
+            # Fallback: probe each backend individually (used when the server
+            # object isn't available, e.g. in tests or future refactors).
             _, raw_servers = load_raw_config(config_path)
             return JSONResponse(await probe_all_servers(raw_servers))
         except Exception as exc:
@@ -239,7 +312,9 @@ def create_api_app(default_config_path: Path, mcp_port: int):
             raw = json.loads(config_path.read_text())
             servers = raw.get("mcpServers", {})
             if name not in servers:
-                return JSONResponse({"error": f"Server '{name}' not found"}, status_code=404)
+                return JSONResponse(
+                    {"error": f"Server '{name}' not found"}, status_code=404
+                )
             if enabled:
                 servers[name].pop("enabled", None)
             else:
@@ -258,7 +333,9 @@ def create_api_app(default_config_path: Path, mcp_port: int):
             raw = json.loads(config_path.read_text())
             servers = raw.get("mcpServers", {})
             if server_name not in servers:
-                return JSONResponse({"error": f"Server '{server_name}' not found"}, status_code=404)
+                return JSONResponse(
+                    {"error": f"Server '{server_name}' not found"}, status_code=404
+                )
             srv = servers[server_name]
             disabled = srv.get("disabledTools", [])
             if enabled:
@@ -278,13 +355,19 @@ def create_api_app(default_config_path: Path, mcp_port: int):
 
     async def list_presets(request: Request) -> JSONResponse:
         data = load_presets()
-        return JSONResponse({**data, "activeConfigPath": str(active_config_from_presets())})
+        return JSONResponse(
+            {**data, "activeConfigPath": str(active_config_from_presets())}
+        )
 
     async def create_preset(request: Request) -> JSONResponse:
         try:
             body = await request.json()
             preset_id = str(uuid.uuid4())
-            preset = {"id": preset_id, "name": body["name"], "filePath": body["filePath"]}
+            preset = {
+                "id": preset_id,
+                "name": body["name"],
+                "filePath": body["filePath"],
+            }
             data = load_presets()
             data["presets"].append(preset)
             save_presets(data)
@@ -346,14 +429,23 @@ def create_api_app(default_config_path: Path, mcp_port: int):
     )
 
 
-def start_api_thread(config_path: Path, mcp_port: int, api_port: int) -> None:
+def start_api_thread(
+    config_path: Path, mcp_port: int, api_port: int, mcp_server=None, main_loop=None
+) -> None:
     """Start the REST API server in a daemon thread alongside the MCP server."""
     import uvicorn
 
-    app = create_api_app(config_path, mcp_port)
+    app = create_api_app(
+        config_path, mcp_port, mcp_server=mcp_server, main_loop=main_loop
+    )
     threading.Thread(
         target=uvicorn.run,
-        kwargs={"app": app, "host": "127.0.0.1", "port": api_port, "log_level": "error"},
+        kwargs={
+            "app": app,
+            "host": "127.0.0.1",
+            "port": api_port,
+            "log_level": "error",
+        },
         daemon=True,
     ).start()
 
@@ -379,7 +471,10 @@ if __name__ == "__main__":
                 if override.exists():
                     config_path = override
                 else:
-                    print(f"Error: config file not found: {sys.argv[i + 1]}", file=sys.stderr)
+                    print(
+                        f"Error: config file not found: {sys.argv[i + 1]}",
+                        file=sys.stderr,
+                    )
                     sys.exit(1)
                 skip_next = True
             else:
@@ -393,11 +488,13 @@ if __name__ == "__main__":
 
     if subcmd == "mcp":
         from jarvis_tui import MCPManagerApp
+
         MCPManagerApp(config_path).run()
         sys.exit(0)
 
     if subcmd == "auth":
         from jarvis_tui import AuthManagerApp
+
         AuthManagerApp(config_path).run()
         sys.exit(0)
 
@@ -426,13 +523,24 @@ if __name__ == "__main__":
 
     if "--auth" in sys.argv:
         # Scan filtered_argv for auth target (first non-flag after --auth)
-        auth_idx = next((i for i, arg in enumerate(filtered_argv) if arg == "--auth"), None)
+        auth_idx = next(
+            (i for i, arg in enumerate(filtered_argv) if arg == "--auth"), None
+        )
         if auth_idx is not None:
-            target = next((filtered_argv[i] for i in range(auth_idx + 1, len(filtered_argv)) if not filtered_argv[i].startswith("-")), None)
+            target = next(
+                (
+                    filtered_argv[i]
+                    for i in range(auth_idx + 1, len(filtered_argv))
+                    if not filtered_argv[i].startswith("-")
+                ),
+                None,
+            )
         else:
             target = None
         if target and target not in config.mcpServers:
-            print(f"Unknown server '{target}'. Available: {', '.join(config.mcpServers)}")
+            print(
+                f"Unknown server '{target}'. Available: {', '.join(config.mcpServers)}"
+            )
             sys.exit(1)
 
         mcp.add_transform(BM25SearchTransform(max_results=5))
@@ -458,10 +566,19 @@ if __name__ == "__main__":
         else:
             port = 7070
 
-        mcp.add_transform(CodeMode() if code_mode else BM25SearchTransform(max_results=5))
-        start_api_thread(config_path, port, port + 1)
-        mcp.run(transport="streamable-http", host="127.0.0.1", port=port, show_banner=False)
+        mcp.add_transform(
+            CodeMode() if code_mode else BM25SearchTransform(max_results=5)
+        )
+        main_loop = asyncio.get_event_loop()
+        start_api_thread(
+            config_path, port, port + 1, mcp_server=mcp, main_loop=main_loop
+        )
+        mcp.run(
+            transport="streamable-http", host="127.0.0.1", port=port, show_banner=False
+        )
 
     else:
-        mcp.add_transform(CodeMode() if code_mode else BM25SearchTransform(max_results=5))
+        mcp.add_transform(
+            CodeMode() if code_mode else BM25SearchTransform(max_results=5)
+        )
         mcp.run(show_banner=False)

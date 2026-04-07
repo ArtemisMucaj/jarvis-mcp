@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import AppKit
 
-struct DiscoveredTool: Identifiable {
+struct DiscoveredTool: Identifiable, Codable {
     let name: String
     let description: String
     var id: String { name }
@@ -112,6 +112,18 @@ class AppState: ObservableObject {
             DispatchQueue.main.async { self?.objectWillChange.send() }
         }
         .store(in: &cancellables)
+
+        // Auto-discover tools when the server transitions to running.
+        processManager.$isRunning
+            .removeDuplicates()
+            .sink { [weak self] running in
+                guard let self, running else { return }
+                // Small delay to let the API thread bind its socket.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.discoverTools()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Disk bootstrap (used only before the server is online)
@@ -188,6 +200,7 @@ class AppState: ObservableObject {
         }
         servers = config.mcpServers
         print("✓ Loaded \(servers.count) server(s) from config")
+        loadToolsFromCache()
     }
 
     func saveConfig() {
@@ -233,6 +246,41 @@ class AppState: ObservableObject {
 
     // MARK: - Tool Discovery (API only)
 
+    /// Path to the on-disk cache of discovered tools, keyed by config path.
+    private var toolsCacheURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".jarvis/tools_cache.json")
+    }
+
+    /// Populate `discoveredTools` from disk for the current config so the UI
+    /// has data immediately, before the server has finished probing.
+    func loadToolsFromCache() {
+        guard let data = try? Data(contentsOf: toolsCacheURL),
+              let cache = try? JSONDecoder().decode([String: [String: [DiscoveredTool]]].self, from: data),
+              let tools = cache[configURL.path]
+        else { return }
+        discoveredTools = tools
+        print("📦 Loaded \(tools.values.map(\.count).reduce(0, +)) cached tools across \(tools.count) server(s)")
+    }
+
+    /// Persist the current `discoveredTools` to disk under the active config path.
+    private func saveToolsToCache() {
+        var cache: [String: [String: [DiscoveredTool]]] = [:]
+        if let data = try? Data(contentsOf: toolsCacheURL),
+           let existing = try? JSONDecoder().decode([String: [String: [DiscoveredTool]]].self, from: data) {
+            cache = existing
+        }
+        cache[configURL.path] = discoveredTools
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(cache) else { return }
+        try? FileManager.default.createDirectory(
+            at: toolsCacheURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: toolsCacheURL)
+    }
+
     func discoverTools() {
         guard !isDiscoveringTools, processManager.isRunning else { return }
         isDiscoveringTools = true
@@ -275,6 +323,7 @@ class AppState: ObservableObject {
             DispatchQueue.main.async {
                 self.discoveredTools = tools
                 self.isDiscoveringTools = false
+                self.saveToolsToCache()
             }
         }.resume()
     }
