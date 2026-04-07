@@ -12,7 +12,7 @@ jobs:
 
   build-jarvis-macos:
     name: Build jarvis binary (macOS arm64)
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -44,7 +44,7 @@ jobs:
 
   build-macos-app:
     name: Build macOS app + DMG
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
