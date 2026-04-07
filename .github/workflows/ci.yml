@@ -8,8 +8,8 @@ on:
 
 jobs:
 
-  build-jarvis-macos:
-    name: Build jarvis binary (macOS arm64)
+  build-macos:
+    name: Build jarvis binary + macOS app (arm64)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,6 +17,17 @@ jobs:
         uses: astral-sh/setup-uv@v5
       - name: Build jarvis binary
         run: bash scripts/build_jarvis_binary.sh
+      - name: Build Xcode project
+        run: |
+          xcodebuild \
+            -project macOs/Jarvis/Jarvis.xcodeproj \
+            -scheme Jarvis \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            build
 
   build-jarvis-linux:
     name: Build jarvis binary (Linux x86_64)
