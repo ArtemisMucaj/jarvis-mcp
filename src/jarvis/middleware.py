@@ -88,8 +88,8 @@ class AuthErrorMiddleware(Middleware):
                 raise ToolError(
                     f"{error_text}\n\n"
                     f"Authentication failed for '{server_name}' and the token could "
-                    "not be refreshed automatically (refresh token may have expired). "
-                    f"Run 'jarvis --auth {server_name}' to re-authenticate."
+                    "not be refreshed automatically. The refresh token may have expired — "
+                    "please re-authenticate through your OAuth provider."
                 ) from exc
 
             # Non-OAuth server (e.g. stdio with GITLAB_TOKEN env var).
