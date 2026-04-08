@@ -31,13 +31,13 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 
-_AUTH_MARKERS = ("401", "unauthorized")
-_REFRESH_TIMEOUT = 5.0  # seconds; silent refresh via refresh_token should be instant
+AUTH_MARKERS = ("401", "unauthorized")
+REFRESH_TIMEOUT = 5.0  # seconds; silent refresh via refresh_token should be instant
 
 
-def _is_auth_error(text: str) -> bool:
+def is_auth_error(text: str) -> bool:
     lower = text.lower()
-    return any(marker in lower for marker in _AUTH_MARKERS)
+    return any(marker in lower for marker in AUTH_MARKERS)
 
 
 class AuthErrorMiddleware(Middleware):
@@ -57,7 +57,7 @@ class AuthErrorMiddleware(Middleware):
         """
         # Sort names longest-first to avoid prefix collisions
         # (e.g. "git" matching before "gitlab").
-        self._servers_by_len = sorted(
+        self.servers_by_len = sorted(
             raw_servers.items(), key=lambda kv: len(kv[0]), reverse=True
         )
 
@@ -70,15 +70,15 @@ class AuthErrorMiddleware(Middleware):
             return await call_next(context)
         except ToolError as exc:
             error_text = str(exc)
-            if not _is_auth_error(error_text):
+            if not is_auth_error(error_text):
                 raise
 
-            server_name, srv_config = self._find_server(context.message.name)
+            server_name, srv_config = self.find_server(context.message.name)
             if server_name is None:
                 raise
 
             if srv_config.get("auth") == "oauth":
-                refreshed = await self._try_refresh(server_name, srv_config)
+                refreshed = await self.try_refresh(server_name, srv_config)
                 if refreshed:
                     raise ToolError(
                         f"{error_text}\n\n"
@@ -100,7 +100,7 @@ class AuthErrorMiddleware(Middleware):
                 "(e.g. the GITLAB_TOKEN environment variable)."
             ) from exc
 
-    async def _try_refresh(self, server_name: str, srv_config: dict) -> bool:
+    async def try_refresh(self, server_name: str, srv_config: dict) -> bool:
         """Probe the server to trigger a silent OAuth token refresh.
 
         Returns True if the refresh succeeded within ``_REFRESH_TIMEOUT``
@@ -112,7 +112,7 @@ class AuthErrorMiddleware(Middleware):
         try:
             await asyncio.wait_for(
                 probe_server(server_name, srv_config),
-                timeout=_REFRESH_TIMEOUT,
+                timeout=REFRESH_TIMEOUT,
             )
             return True
         except asyncio.TimeoutError:
@@ -122,9 +122,9 @@ class AuthErrorMiddleware(Middleware):
         except Exception:
             return False
 
-    def _find_server(self, tool_name: str) -> tuple[str, dict] | tuple[None, None]:
+    def find_server(self, tool_name: str) -> tuple[str, dict] | tuple[None, None]:
         """Return ``(server_name, config)`` whose prefix matches *tool_name*."""
-        for name, cfg in self._servers_by_len:
+        for name, cfg in self.servers_by_len:
             if tool_name.startswith(f"{name}_"):
                 return name, cfg
         return None, None
