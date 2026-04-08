@@ -13,6 +13,7 @@ from jarvis.config import (
     get_disabled_tools,
     load_raw_config,
 )
+from jarvis.middleware import AuthErrorMiddleware
 from jarvis.api import start_api_thread
 
 
@@ -77,7 +78,7 @@ if subcmd == "auth":
     AuthManagerApp(config_path).run()
     sys.exit(0)
 
-mcp_dict, _ = load_raw_config(config_path)
+mcp_dict, raw_servers = load_raw_config(config_path)
 disabled_tools = get_disabled_tools(config_path)
 code_mode = "--code-mode" in sys.argv
 
@@ -102,6 +103,7 @@ if "--http" in sys.argv:
     mcp = build_proxy(config, "jarvis")
     if disabled_tools:
         mcp.disable(names=disabled_tools)
+    mcp.add_middleware(AuthErrorMiddleware(raw_servers))
     mcp.add_transform(CodeMode() if code_mode else BM25SearchTransform(max_results=5))
 
     async def _run_http() -> None:
@@ -120,5 +122,6 @@ else:
     mcp = build_proxy(config, "jarvis")
     if disabled_tools:
         mcp.disable(names=disabled_tools)
+    mcp.add_middleware(AuthErrorMiddleware(raw_servers))
     mcp.add_transform(CodeMode() if code_mode else BM25SearchTransform(max_results=5))
     mcp.run(show_banner=False)
