@@ -27,6 +27,8 @@ uv run --with 'pyinstaller==6.19.0' pyinstaller \
   --copy-metadata starlette \
   --copy-metadata uvicorn \
   --copy-metadata textual \
+  --copy-metadata pydantic-monty \
+  --hidden-import pydantic_monty \
   "$REPO_ROOT/src/jarvis/__main__.py"
 
 echo "==> Done. Binary at: $OUT_DIR/jarvis"

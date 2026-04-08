@@ -29,7 +29,6 @@ def load_config(config_path: Path) -> tuple[dict[str, Any], str | None]:
         return {"mcpServers": {}}, f"Config parse error: {exc}"
 
 
-
 # ── MCP Manager ───────────────────────────────────────────────────────────────
 
 
@@ -192,7 +191,10 @@ class MCPManagerApp(App[None]):
         raw_servers = {
             d["name"]: servers_config[d["name"]]
             for node in tree.root.children
-            if (d := node.data) and d.get("type") == "server" and d.get("enabled", True) and d["name"] in servers_config
+            if (d := node.data)
+            and d.get("type") == "server"
+            and d.get("enabled", True)
+            and d["name"] in servers_config
         }
 
         total = len(raw_servers)
@@ -285,8 +287,8 @@ class AuthManagerApp(App[None]):
     """Manage OAuth authentication for proxied MCP servers.
 
     Lists every configured server and its auth type.  For OAuth servers the
-    user can trigger a login flow (opens the browser via the existing
-    ``jarvis --auth SERVER`` flow) or clear all cached tokens.
+    user can trigger a login flow (opens the browser) or clear all cached
+    tokens.
     """
 
     TITLE = "Jarvis Auth Manager"

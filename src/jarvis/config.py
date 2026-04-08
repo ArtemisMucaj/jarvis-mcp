@@ -12,7 +12,9 @@ from key_value.aio.stores.disk import DiskStore
 
 ENV_VAR_RE = re.compile(r"\$\{(\w+)\}")
 NON_STANDARD_KEYS = {"enabled", "disabledTools"}
-DATA_DIR = Path.home() / ".jarvis"
+# Data directory is overridable via ``JARVIS_DATA_DIR`` so tests (and alternate
+# deployments) can isolate their state from the user's real ``~/.jarvis``.
+DATA_DIR = Path(os.environ.get("JARVIS_DATA_DIR") or (Path.home() / ".jarvis"))
 PRESETS_PATH = DATA_DIR / "presets.json"
 token_storage = DiskStore(directory=str(DATA_DIR))
 

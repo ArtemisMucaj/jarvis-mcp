@@ -1,6 +1,8 @@
 .venv/
 .tokens/
 __pycache__/
+.pytest_cache/
+.coverage
 macOs/Jarvis/Jarvis.xcodeproj/xcuserdata/
 macOs/Jarvis/Jarvis.xcodeproj/project.xcworkspace/xcuserdata/
 macOs/Jarvis/Jarvis/Resources/jarvis

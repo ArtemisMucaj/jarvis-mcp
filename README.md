@@ -133,17 +133,13 @@ Lists all servers and their auth status. `l` to trigger the OAuth login flow for
 
 ## OAuth authentication
 
-Servers with `"auth": "oauth"` require a one-time browser login. Use the `auth` TUI (above), or authenticate from the CLI:
+Servers with `"auth": "oauth"` require a one-time browser login. Use the `auth` TUI to trigger the flow:
 
 ```bash
-# All OAuth servers
-jarvis --auth
-
-# Specific server
-jarvis --auth atlassian
+jarvis auth
 ```
 
-Tokens are stored in `~/.jarvis/` and reused automatically on subsequent runs.
+Select the server and press `l` to open the browser login flow. Tokens are stored in `~/.jarvis/` and reused automatically on subsequent runs.
 
 ## Modes
 
@@ -173,7 +169,6 @@ Commands:
 Options:
   --config PATH     Use a specific config file
   --http PORT       Run as an HTTP server on PORT (management UI)
-  --auth [SERVER]   Authenticate with all servers or a specific one
   --code-mode       Enable code mode transform
   --help, -h        Show this message and exit
 

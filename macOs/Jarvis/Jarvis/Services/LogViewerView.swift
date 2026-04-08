@@ -94,8 +94,7 @@ struct LogViewerView: View {
         if let content = try? String(contentsOf: logURL, encoding: .utf8) {
             // Get last 10000 lines to avoid memory issues
             let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
-            let recentLines = lines.suffix(10000)
-            logContent = recentLines.joined(separator: "\n")
+            logContent = lines.suffix(10000).joined(separator: "\n")
         } else {
             logContent = "No logs found at \(logURL.path(percentEncoded: false))\n\nThe log file will be created when the server starts."
         }
