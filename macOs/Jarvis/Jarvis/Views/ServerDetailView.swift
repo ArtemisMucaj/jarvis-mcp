@@ -209,7 +209,6 @@ struct ServerDetailView: View {
                     HStack {
                         Spacer()
                         Button("Apply Tool Changes & Restart") {
-                            state.serversRequiringRestart.remove(name)
                             applyChanges()
                         }
                         .buttonStyle(.borderedProminent)
