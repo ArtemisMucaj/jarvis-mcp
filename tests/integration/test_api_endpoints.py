@@ -140,9 +140,7 @@ class TestToggleServer:
     def test_disable_server_writes_enabled_false(
         self, client: TestClient, servers_json: Path
     ) -> None:
-        response = client.post(
-            "/api/servers/alpha/toggle", json={"enabled": False}
-        )
+        response = client.post("/api/servers/alpha/toggle", json={"enabled": False})
         assert response.status_code == 200
         data = json.loads(servers_json.read_text())
         assert data["mcpServers"]["alpha"]["enabled"] is False
@@ -151,17 +149,13 @@ class TestToggleServer:
         self, client: TestClient, servers_json: Path
     ) -> None:
         # ``gamma`` starts with enabled=false
-        response = client.post(
-            "/api/servers/gamma/toggle", json={"enabled": True}
-        )
+        response = client.post("/api/servers/gamma/toggle", json={"enabled": True})
         assert response.status_code == 200
         data = json.loads(servers_json.read_text())
         assert "enabled" not in data["mcpServers"]["gamma"]
 
     def test_unknown_server_404(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/servers/ghost/toggle", json={"enabled": False}
-        )
+        response = client.post("/api/servers/ghost/toggle", json={"enabled": False})
         assert response.status_code == 404
         assert "not found" in response.json()["error"]
 
@@ -251,9 +245,7 @@ class TestPresetsEndpoints:
         listing = client.get("/api/presets").json()
         assert any(p["id"] == preset["id"] for p in listing["presets"])
 
-    def test_create_preset_missing_fields_returns_400(
-        self, client: TestClient
-    ) -> None:
+    def test_create_preset_missing_fields_returns_400(self, client: TestClient) -> None:
         response = client.post("/api/presets", json={"name": "only-name"})
         assert response.status_code == 400
 
@@ -330,15 +322,101 @@ class TestPresetsEndpoints:
         assert response.json()["activePresetID"] is None
 
 
+# ── Hot-reload callback wiring ───────────────────────────────────────────────
+
+
+class TestHotReloadCallbacks:
+    """The API calls ``on_config_reload`` / ``on_tool_toggle`` on live changes.
+
+    These callbacks are what let ``__main__.py`` hot-swap the running proxy
+    without making connected MCP clients reconnect.
+    """
+
+    @pytest.fixture
+    def cb_client(self, data_dir: Path, servers_json: Path):
+        reload_calls: list[None] = []
+        tool_calls: list[tuple[str, str, bool]] = []
+        app = create_api_app(
+            mcp_port=7070,
+            on_config_reload=lambda: reload_calls.append(None),
+            on_tool_toggle=lambda s, t, e: tool_calls.append((s, t, e)),
+        )
+        with TestClient(app) as c:
+            yield c, reload_calls, tool_calls
+
+    def test_server_toggle_triggers_reload(self, cb_client) -> None:
+        client, reload_calls, tool_calls = cb_client
+        client.post("/api/servers/alpha/toggle", json={"enabled": False})
+        assert len(reload_calls) == 1
+        assert tool_calls == []
+
+    def test_tool_toggle_triggers_tool_callback_not_reload(self, cb_client) -> None:
+        client, reload_calls, tool_calls = cb_client
+        client.post(
+            "/api/tools/toggle",
+            json={"server": "alpha", "tool": "bad", "enabled": False},
+        )
+        assert reload_calls == []
+        assert tool_calls == [("alpha", "bad", False)]
+
+    def test_config_put_triggers_reload(self, cb_client) -> None:
+        client, reload_calls, _ = cb_client
+        client.put("/api/config", json={"mcpServers": {}})
+        assert len(reload_calls) == 1
+
+    def test_preset_activation_triggers_reload(self, cb_client, data_dir: Path) -> None:
+        client, reload_calls, _ = cb_client
+        f = data_dir / "p.json"
+        f.write_text('{"mcpServers": {}}')
+        created = client.post(
+            "/api/presets", json={"name": "p", "filePath": str(f)}
+        ).json()["preset"]
+        # activating
+        client.post(f"/api/presets/{created['id']}/activate")
+        # deactivating
+        client.post("/api/presets/default/activate")
+        assert len(reload_calls) == 2
+
+    def test_deleting_active_preset_triggers_reload(
+        self, cb_client, data_dir: Path
+    ) -> None:
+        client, reload_calls, _ = cb_client
+        f = data_dir / "p.json"
+        f.write_text('{"mcpServers": {}}')
+        created = client.post(
+            "/api/presets", json={"name": "p", "filePath": str(f)}
+        ).json()["preset"]
+        client.post(f"/api/presets/{created['id']}/activate")
+        reload_calls.clear()
+        client.delete(f"/api/presets/{created['id']}")
+        assert len(reload_calls) == 1
+
+    def test_deleting_inactive_preset_does_not_reload(
+        self, cb_client, data_dir: Path
+    ) -> None:
+        client, reload_calls, _ = cb_client
+        f = data_dir / "p.json"
+        f.write_text('{"mcpServers": {}}')
+        created = client.post(
+            "/api/presets", json={"name": "p", "filePath": str(f)}
+        ).json()["preset"]
+        # never activated
+        client.delete(f"/api/presets/{created['id']}")
+        assert reload_calls == []
+
+    def test_unknown_server_toggle_does_not_reload(self, cb_client) -> None:
+        client, reload_calls, _ = cb_client
+        client.post("/api/servers/ghost/toggle", json={"enabled": False})
+        assert reload_calls == []
+
+
 # ── Config round-trip across endpoints ───────────────────────────────────────
 
 
 class TestConfigRoundTrip:
     """Sanity check: server/tool toggles leave a valid readable config."""
 
-    def test_toggle_then_get_returns_updated_config(
-        self, client: TestClient
-    ) -> None:
+    def test_toggle_then_get_returns_updated_config(self, client: TestClient) -> None:
         client.post("/api/servers/alpha/toggle", json={"enabled": False})
         client.post(
             "/api/tools/toggle",

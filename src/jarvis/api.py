@@ -44,7 +44,7 @@ def atomic_write(path: Path, data: dict) -> None:
 # ── REST API ──────────────────────────────────────────────────────────────────
 
 
-def create_api_app(mcp_port: int):
+def create_api_app(mcp_port: int, on_config_reload=None, on_tool_toggle=None):
     """Build a Starlette REST API app that runs alongside the MCP server.
 
     Endpoints
@@ -110,6 +110,8 @@ def create_api_app(mcp_port: int):
             body = await request.json()
             async with get_lock(config_path):
                 atomic_write(config_path, body)
+            if on_config_reload is not None:
+                on_config_reload()
             return JSONResponse({"status": "ok"})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
@@ -131,6 +133,8 @@ def create_api_app(mcp_port: int):
                 else:
                     servers[name]["enabled"] = False
                 atomic_write(config_path, raw)
+            if on_config_reload is not None:
+                on_config_reload()
             return JSONResponse({"status": "ok"})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
@@ -159,6 +163,8 @@ def create_api_app(mcp_port: int):
                 else:
                     srv.pop("disabledTools", None)
                 atomic_write(config_path, raw)
+            if on_tool_toggle is not None:
+                on_tool_toggle(server_name, tool_name, enabled)
             return JSONResponse({"status": "ok"})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
@@ -168,7 +174,10 @@ def create_api_app(mcp_port: int):
     async def list_presets(request: Request) -> JSONResponse:
         data = load_presets()
         return JSONResponse(
-            {**data, "activeConfigPath": str(active_config_from_presets())}
+            {
+                **data,
+                "activeConfigPath": str(active_config_from_presets()),
+            }
         )
 
     async def create_preset(request: Request) -> JSONResponse:
@@ -196,6 +205,12 @@ def create_api_app(mcp_port: int):
                 if p["id"] == preset_id:
                     p.update({k: body[k] for k in ("name", "filePath") if k in body})
                     save_presets(data)
+                    if (
+                        on_config_reload is not None
+                        and data.get("activePresetID") == preset_id
+                        and "filePath" in body
+                    ):
+                        on_config_reload()
                     return JSONResponse({"preset": p})
             return JSONResponse({"error": "Preset not found"}, status_code=404)
         except Exception as exc:
@@ -208,9 +223,12 @@ def create_api_app(mcp_port: int):
         data["presets"] = [p for p in data["presets"] if p["id"] != preset_id]
         if len(data["presets"]) == before:
             return JSONResponse({"error": "Preset not found"}, status_code=404)
-        if data.get("activePresetID") == preset_id:
+        was_active = data.get("activePresetID") == preset_id
+        if was_active:
             data["activePresetID"] = None
         save_presets(data)
+        if was_active and on_config_reload is not None:
+            on_config_reload()
         return JSONResponse({"status": "ok"})
 
     async def activate_preset(request: Request) -> JSONResponse:
@@ -223,6 +241,8 @@ def create_api_app(mcp_port: int):
         else:
             data["activePresetID"] = None
         save_presets(data)
+        if on_config_reload is not None:
+            on_config_reload()
         return JSONResponse({"status": "ok", "activePresetID": data["activePresetID"]})
 
     return Starlette(
@@ -241,11 +261,20 @@ def create_api_app(mcp_port: int):
     )
 
 
-def start_api_thread(mcp_port: int, api_port: int) -> None:
+def start_api_thread(
+    mcp_port: int,
+    api_port: int,
+    on_config_reload=None,
+    on_tool_toggle=None,
+) -> None:
     """Start the REST API server in a daemon thread alongside the MCP server."""
     import uvicorn
 
-    app = create_api_app(mcp_port)
+    app = create_api_app(
+        mcp_port,
+        on_config_reload=on_config_reload,
+        on_tool_toggle=on_tool_toggle,
+    )
     threading.Thread(
         target=uvicorn.run,
         kwargs={

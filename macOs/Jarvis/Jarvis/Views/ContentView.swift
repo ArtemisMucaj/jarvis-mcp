@@ -209,7 +209,7 @@ struct ServerRowView: View {
                 get: { server.enabled ?? true },
                 set: { newValue in
                     state.servers[name]?.enabled = newValue
-                    state.saveConfig()
+                    state.postServerToggle(server: name, enabled: newValue)
                 }
             ))
             .labelsHidden()

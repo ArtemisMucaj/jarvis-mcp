@@ -55,12 +55,10 @@ struct ServerDetailView: View {
 
     private func applyChanges() {
         state.servers[name] = stagedServer
-        state.saveConfig()
         hasChanges = false
-        // Restart server if running to apply changes
-        if state.processManager.isRunning {
-            state.restartServer()
-        }
+        // PUT the full config via the REST API, which hot-swaps the running
+        // proxy (rebuilds the inner) without restarting the server process.
+        state.putFullConfig()
     }
 
     var body: some View {
@@ -204,16 +202,6 @@ struct ServerDetailView: View {
                     Text("No tools discovered yet")
                         .foregroundStyle(.secondary)
                 }
-
-                if state.serversRequiringRestart.contains(name) {
-                    HStack {
-                        Spacer()
-                        Button("Apply Tool Changes & Restart") {
-                            applyChanges()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
             } header: {
                 HStack {
                     Text("Tools")
@@ -259,7 +247,7 @@ struct ServerDetailView: View {
                         }
                         .foregroundStyle(.secondary)
 
-                        Button("Apply & Restart") {
+                        Button("Apply") {
                             applyChanges()
                         }
                         .buttonStyle(.borderedProminent)
@@ -313,11 +301,6 @@ struct ToolRowView: View {
                 }
             }
             Spacer()
-            if state.serversRequiringRestart.contains(serverName) {
-                Text("Restart required")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
             Toggle("", isOn: Binding(
                 get: { !isDisabled },
                 set: { _ in

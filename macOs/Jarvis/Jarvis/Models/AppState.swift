@@ -37,9 +37,6 @@ private struct CreatePresetResponse: Codable {
 
 class AppState: ObservableObject {
     @Published var servers: [String: MCPServer] = [:]
-    /// UI-only: tracks which servers have pending tool-toggle changes that need a restart.
-    /// Never persisted to servers.json.
-    @Published var serversRequiringRestart: Set<String> = []
     @Published var processManager: ProcessManager
     @Published var discoveredTools: [String: [DiscoveredTool]] = [:]
     @Published var isDiscoveringTools = false
@@ -243,7 +240,6 @@ class AppState: ObservableObject {
     func stopServer()  { processManager.stop() }
 
     func restartServer() {
-        serversRequiringRestart.removeAll()
         processManager.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.startServer() }
     }
@@ -337,6 +333,9 @@ class AppState: ObservableObject {
     }
 
     func toggleTool(server: String, tool: String) {
+        // Optimistic local update for snappy UI.
+        let currentlyDisabled = isToolDisabled(server: server, tool: tool)
+        let newEnabled = currentlyDisabled  // flipping: if was disabled, now enabled
         if servers[server]?.disabledTools == nil { servers[server]?.disabledTools = [] }
         if let idx = servers[server]?.disabledTools?.firstIndex(of: tool) {
             servers[server]?.disabledTools?.remove(at: idx)
@@ -344,8 +343,50 @@ class AppState: ObservableObject {
             servers[server]?.disabledTools?.append(tool)
         }
         if servers[server]?.disabledTools?.isEmpty == true { servers[server]?.disabledTools = nil }
-        serversRequiringRestart.insert(server)
-        saveConfig()
+
+        // Persist via the REST API so the running proxy hot-swaps the tool
+        // (no process restart, no MCP client reconnect).
+        postToolToggle(server: server, tool: tool, enabled: newEnabled)
+    }
+
+    // MARK: - Config API
+
+    /// POST /api/tools/toggle — triggers on_tool_toggle on the running proxy.
+    private func postToolToggle(server: String, tool: String, enabled: Bool) {
+        guard let url = URL(string: "\(apiBase)/api/tools/toggle") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "server": server, "tool": tool, "enabled": enabled,
+        ])
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    /// POST /api/servers/{name}/toggle — triggers on_config_reload on the running proxy.
+    func postServerToggle(server: String, enabled: Bool) {
+        guard let encoded = server.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(apiBase)/api/servers/\(encoded)/toggle")
+        else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["enabled": enabled])
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    /// PUT /api/config — writes the full config + triggers on_config_reload.
+    /// Used when structural changes (command/args/env/url/transport) require a rebuild.
+    func putFullConfig() {
+        guard let url = URL(string: "\(apiBase)/api/config") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let config = ServersConfig(mcpServers: servers)
+        request.httpBody = try? encoder.encode(config)
+        URLSession.shared.dataTask(with: request).resume()
     }
 
     // MARK: - Preset API
@@ -456,7 +497,7 @@ class AppState: ObservableObject {
     }
 
     /// Activate a preset (or nil for default).  Calls POST /api/presets/{id}/activate,
-    /// updates local state, then restarts the server so it picks up the new config.
+    /// which hot-swaps the running proxy's active config without restarting the process.
     func switchPreset(_ preset: Preset?, completion: ((Bool) -> Void)? = nil) {
         let path: String
         if let preset {
@@ -468,7 +509,6 @@ class AppState: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        let wasRunning = processManager.isRunning || processManager.isStarting
 
         URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
             guard let self,
@@ -478,7 +518,6 @@ class AppState: ObservableObject {
                 self.activePresetID = preset?.id
                 self.loadConfig()
                 self.startFileWatcher()
-                if wasRunning { self.restartServer() }
                 completion?(true)
             }
         }.resume()
