@@ -113,7 +113,7 @@ Jarvis reads from `~/.jarvis/servers.json`. The format follows the standard MCP 
 
 ### macOS app
 
-The menu bar app keeps Jarvis running as a persistent HTTP server. From the menu bar icon you can start/stop the server, copy the endpoint URL, and open the main window to browse servers, switch presets, and tail the log.
+The menu bar app keeps Jarvis running as a persistent HTTP server. From the menu bar icon you can start/stop the server, copy the endpoint URL, and open the main window to browse servers, switch presets, and tail the log. Server and tool toggles, as well as preset switches, apply live — no restart needed.
 
 ### TUI
 
@@ -140,6 +140,8 @@ jarvis auth
 ```
 
 Select the server and press `l` to open the browser login flow. Tokens are stored in `~/.jarvis/` and reused automatically on subsequent runs.
+
+If a proxied tool call returns a 401/Unauthorized error, Jarvis silently exchanges the stored refresh token for a new access token and asks the caller to retry — no browser prompt as long as the refresh token is still valid. Only when the refresh token has also expired do you need to re-run `jarvis auth`.
 
 ## Modes
 
@@ -176,12 +178,14 @@ With no command or options, runs as a stdio MCP server.
 ```
 
 **Config resolution order** (when `--config` is not passed):
-1. Active preset from `~/.jarvis/presets.json`
-2. `~/.jarvis/servers.json`
+1. Active preset from `~/.jarvis/presets.json` (if set and the file exists)
+2. `~/.jarvis/servers.json` (auto-created empty if missing)
 
 ## REST API
 
 When running with `--http PORT`, a companion REST API starts on `PORT + 1` (default `7071`), bound to `127.0.0.1`. The macOS app uses this internally.
+
+Changes made through the API — activating a preset, toggling a server, toggling an individual tool, or overwriting `servers.json` — are applied **live**. The inner proxy is rebuilt (or mutated in place for single-tool toggles) and a `notifications/tools/list_changed` message is pushed to every connected MCP session, so clients pick up the new tool set without reconnecting or losing their session.
 
 | Method | Path | Description |
 |---|---|---|
@@ -195,8 +199,7 @@ When running with `--http PORT`, a companion REST API starts on `PORT + 1` (defa
 | POST | `/api/presets` | Create a preset — `{"name", "filePath"}` |
 | PATCH | `/api/presets/{id}` | Rename or update a preset |
 | DELETE | `/api/presets/{id}` | Delete a preset |
-| POST | `/api/presets/{id}/activate` | Switch to a preset |
-| POST | `/api/presets/default/activate` | Revert to `~/.jarvis/servers.json` |
+| POST | `/api/presets/{id}/activate` | Switch to a preset (use `id=default` to revert to `~/.jarvis/servers.json`) |
 
 ## File locations
 
