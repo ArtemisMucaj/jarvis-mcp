@@ -37,6 +37,9 @@ private struct CreatePresetResponse: Codable {
 
 class AppState: ObservableObject {
     @Published var servers: [String: MCPServer] = [:]
+    /// UI-only: tracks which servers have pending tool-toggle changes that need a restart.
+    /// Never persisted to servers.json.
+    @Published var serversRequiringRestart: Set<String> = []
     @Published var processManager: ProcessManager
     @Published var discoveredTools: [String: [DiscoveredTool]] = [:]
     @Published var isDiscoveringTools = false
@@ -340,7 +343,7 @@ class AppState: ObservableObject {
             servers[server]?.disabledTools?.append(tool)
         }
         if servers[server]?.disabledTools?.isEmpty == true { servers[server]?.disabledTools = nil }
-        servers[server]?.requiresRestart = true
+        serversRequiringRestart.insert(server)
         saveConfig()
     }
 

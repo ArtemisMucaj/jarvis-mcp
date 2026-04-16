@@ -205,11 +205,11 @@ struct ServerDetailView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if state.servers[name]?.requiresRestart == true {
+                if state.serversRequiringRestart.contains(name) {
                     HStack {
                         Spacer()
                         Button("Apply Tool Changes & Restart") {
-                            state.servers[name]?.requiresRestart = false
+                            state.serversRequiringRestart.remove(name)
                             applyChanges()
                         }
                         .buttonStyle(.borderedProminent)
@@ -314,7 +314,7 @@ struct ToolRowView: View {
                 }
             }
             Spacer()
-            if state.servers[serverName]?.requiresRestart == true {
+            if state.serversRequiringRestart.contains(serverName) {
                 Text("Restart required")
                     .font(.caption)
                     .foregroundStyle(.orange)
