@@ -5,13 +5,7 @@ import AppKit
 struct PresetsView: View {
     @EnvironmentObject var state: AppState
 
-    @State private var logContent = ""
-    @State private var isAutoRefreshing = false
-    @State private var refreshTimer: Timer?
-    @State private var lastReadOffset: UInt64 = 0
-
-    private let logURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".jarvis/jarvis.log")
+    @StateObject private var tailer = LogTailer()
 
     var body: some View {
         Form {
@@ -64,22 +58,14 @@ struct PresetsView: View {
             }
 
             Section {
-                LogSectionView(logContent: logContent)
+                LogSectionView(logContent: tailer.logContent)
             } header: {
                 HStack(spacing: 12) {
                     Text("Server Logs")
                     Spacer()
-                    Toggle(isOn: $isAutoRefreshing) {
-                        Label("Auto-refresh", systemImage: "arrow.clockwise")
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help("Automatically refresh logs every second")
-                    Button("Refresh") { loadLogs() }
+                    Button("Clear", action: tailer.clear)
                         .buttonStyle(.borderless)
-                    Button("Clear", action: clearLogs)
-                        .buttonStyle(.borderless)
-                    Button("Open in Editor") { NSWorkspace.shared.open(logURL) }
+                    Button("Open in Editor") { NSWorkspace.shared.open(tailer.logURL) }
                         .buttonStyle(.borderless)
                 }
             }
@@ -87,76 +73,12 @@ struct PresetsView: View {
         .formStyle(.grouped)
         .navigationTitle("Presets")
         .onAppear {
-            loadLogs()
-            startAutoRefresh()
+            tailer.start()
             // Sync preset list from server if it's running
             if state.processManager.isRunning { state.fetchPresets() }
         }
         .onDisappear {
-            isAutoRefreshing = false
-            refreshTimer?.invalidate()
-            refreshTimer = nil
-        }
-        .onChange(of: isAutoRefreshing) { _, newValue in
-            if newValue { startAutoRefresh() }
-        }
-    }
-
-    // MARK: - Log helpers
-
-    private func loadLogs(force: Bool = false) {
-        DispatchQueue.global(qos: .utility).async {
-            guard let handle = try? FileHandle(forReadingFrom: logURL) else {
-                DispatchQueue.main.async {
-                    logContent = "No logs found at \(logURL.path(percentEncoded: false))\n\nThe log file will be created when the server starts."
-                    lastReadOffset = 0
-                }
-                return
-            }
-            defer { try? handle.close() }
-
-            let fileSize = (try? handle.seekToEnd()) ?? 0
-
-            if force || lastReadOffset == 0 {
-                let windowSize: UInt64 = 512 * 1024
-                let startOffset = fileSize > windowSize ? fileSize - windowSize : 0
-                try? handle.seek(toOffset: startOffset)
-                let data = handle.readDataToEndOfFile()
-                let raw = String(data: data, encoding: .utf8) ?? ""
-                let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
-                let trimmed = lines.suffix(10_000).joined(separator: "\n")
-                DispatchQueue.main.async {
-                    logContent = trimmed
-                    lastReadOffset = fileSize
-                }
-            } else if fileSize > lastReadOffset {
-                try? handle.seek(toOffset: lastReadOffset)
-                let data = handle.readDataToEndOfFile()
-                guard let newText = String(data: data, encoding: .utf8), !newText.isEmpty else { return }
-                DispatchQueue.main.async {
-                    logContent += newText
-                    lastReadOffset = fileSize
-                }
-            }
-        }
-    }
-
-    private func clearLogs() {
-        try? "".write(to: logURL, atomically: true, encoding: .utf8)
-        lastReadOffset = 0
-        logContent = ""
-        loadLogs(force: true)
-    }
-
-    private func startAutoRefresh() {
-        refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            guard isAutoRefreshing else {
-                refreshTimer?.invalidate()
-                refreshTimer = nil
-                return
-            }
-            loadLogs()
+            tailer.stop()
         }
     }
 
