@@ -25,11 +25,14 @@ to open, we fall back to directing the user to ``jarvis --auth <server>``.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import mcp.types as mt
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
+
+log = logging.getLogger("jarvis.middleware")
 
 AUTH_MARKERS = ("401", "unauthorized")
 REFRESH_TIMEOUT = 5.0  # seconds; silent refresh via refresh_token should be instant
@@ -78,8 +81,12 @@ class AuthErrorMiddleware(Middleware):
                 raise
 
             if srv_config.get("auth") == "oauth":
+                log.info(
+                    "Auth error on '%s', attempting OAuth token refresh", server_name
+                )
                 refreshed = await self.try_refresh(server_name, srv_config)
                 if refreshed:
+                    log.info("OAuth token refreshed for '%s'", server_name)
                     raise ToolError(
                         f"{error_text}\n\n"
                         f"The OAuth token for '{server_name}' has been refreshed. "
@@ -93,6 +100,7 @@ class AuthErrorMiddleware(Middleware):
                 ) from exc
 
             # Non-OAuth server (e.g. stdio with GITLAB_TOKEN env var).
+            log.warning("Auth error on non-OAuth server '%s'", server_name)
             raise ToolError(
                 f"{error_text}\n\n"
                 f"Authentication failed for '{server_name}'. "

@@ -1,5 +1,17 @@
-import asyncio
+# Inject the system trust store (macOS Keychain, Windows cert store, etc.)
+# so that corporate proxies like Zscaler work out of the box.
+# This MUST run before any other imports that might create SSL contexts.
 import sys
+
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +29,30 @@ from jarvis.config import (
 )
 from jarvis.middleware import AuthErrorMiddleware
 from jarvis.api import start_api_thread
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+# The macOS app captures stderr → ~/.jarvis/jarvis.log, so all logging goes
+# to stderr.  Rich is already installed (FastMCP dependency) and gives us
+# pretty, timestamped output that matches the existing log format.
+
+log = logging.getLogger("jarvis")
+log.setLevel(logging.INFO)
+
+if not log.handlers:
+    try:
+        from rich.logging import RichHandler
+
+        handler = RichHandler(
+            show_path=True,
+            rich_tracebacks=True,
+            tracebacks_show_locals=False,
+        )
+    except ImportError:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+        )
+    log.addHandler(handler)
 
 
 # Priority: --config flag  >  active preset in presets.json  >  ~/.jarvis/servers.json
@@ -95,8 +131,18 @@ def build_mcp(cfg_path: Path, name: str) -> FastMCP:
     disabled = get_disabled_tools(cfg_path)
     cfg = MCPConfig.model_validate(mcp_dict)
     configure_servers(cfg)
+
+    server_names = list(cfg.mcpServers.keys())
+    log.info(
+        "Loading config %s — %d server(s): %s",
+        cfg_path,
+        len(server_names),
+        ", ".join(server_names) or "(none)",
+    )
+
     m = build_proxy(cfg, name)
     if disabled:
+        log.info("Disabled tools: %s", ", ".join(sorted(disabled)))
         m.disable(names=disabled)
     m.add_middleware(AuthErrorMiddleware(raw_servers))
     m.add_transform(CodeMode() if code_mode else BM25SearchTransform(max_results=5))
@@ -133,6 +179,7 @@ if "--http" in sys.argv:
     # sessions — no session disruption, no reconnect required.
 
     initial_inner = build_mcp(config_path, "jarvis-proxy")
+    log.info("Starting HTTP mode — MCP on :%d, API on :%d", port, port + 1)
     outer_mcp = FastMCP("jarvis")
     swappable_provider = FastMCPProvider(initial_inner)
     outer_mcp.add_provider(swappable_provider)
@@ -215,9 +262,10 @@ if "--http" in sys.argv:
             try:
                 new_inner = build_mcp(new_cfg, "jarvis-proxy")
             except Exception as exc:
-                print(f"Warning: could not reload config: {exc}", file=sys.stderr)
+                log.error("Config reload failed: %s", exc)
                 return
             swappable_provider.server = new_inner
+            log.info("Config reloaded from %s", new_cfg)
             await broadcast_tools_changed()
 
         async def on_tool_toggle(server: str, tool: str, enabled: bool) -> None:
@@ -230,8 +278,10 @@ if "--http" in sys.argv:
             names = {f"{server}_{tool}"}
             if enabled:
                 inner.enable(names=names)
+                log.info("Enabled tool %s_%s", server, tool)
             else:
                 inner.disable(names=names)
+                log.info("Disabled tool %s_%s", server, tool)
             await broadcast_tools_changed()
 
         def config_reload_cb() -> None:
@@ -255,7 +305,7 @@ if "--http" in sys.argv:
             timeout_graceful_shutdown=2,
             lifespan="on",
             ws="websockets-sansio",
-            log_level="error",
+            log_level="info",
         )
         await uvicorn.Server(cfg).serve()
 
@@ -263,4 +313,5 @@ if "--http" in sys.argv:
 
 else:
     mcp = build_mcp(config_path, "jarvis")
+    log.info("Starting stdio mode")
     mcp.run(show_banner=False)

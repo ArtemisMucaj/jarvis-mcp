@@ -105,3 +105,13 @@ def test_build_proxy_adds_provider_per_server():
     named = [ns for ns in added if ns]
     assert len(named) == 2
     assert set(named) == {"gl", "remote"}
+
+
+def test_zstandard_decoder_available():
+    """Verify that httpx can decode zstd responses (zstandard is installed)."""
+    try:
+        from httpx._decoders import SUPPORTED_DECODERS
+
+        assert "zstd" in SUPPORTED_DECODERS
+    except ImportError:
+        pass

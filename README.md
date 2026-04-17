@@ -159,6 +159,20 @@ jarvis --http 7070 --code-mode
 
 Can also be toggled in the macOS app under **Settings**.
 
+## Compressed Response Handling
+
+Jarvis supports gzip and zstd compressed responses from HTTP/SSE MCP servers out of the box. The `zstandard` library is bundled so that httpx can natively decode `Content-Encoding: zstd` responses without extra configuration.
+
+## Enterprise networks (Zscaler, corporate proxies)
+
+Jarvis uses [truststore](https://github.com/sethmlarson/truststore) to automatically trust certificates from the OS trust store (macOS Keychain, Windows cert store). This means corporate proxy CA certificates added to your system are picked up without extra configuration.
+
+The build scripts also set `UV_NATIVE_TLS=1` so that `uv` uses the OS trust store when fetching packages from PyPI. If you're running `uv` commands manually and hitting SSL errors, set this in your shell:
+
+```bash
+export UV_NATIVE_TLS=1
+```
+
 ## CLI reference
 
 ```

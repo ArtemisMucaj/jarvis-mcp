@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Use the OS trust store (macOS Keychain / Windows cert store) so uv can
+# reach PyPI behind enterprise proxies like Zscaler.
+export UV_NATIVE_TLS=1
+
 command -v uv >/dev/null 2>&1 || { echo "ERROR: uv is not installed. See https://docs.astral.sh/uv/"; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

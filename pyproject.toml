@@ -8,6 +8,8 @@ dependencies = [
     "mcp>=1.0",
     "py-key-value-aio[disk]",
     "textual>=0.83",
+    "truststore>=0.9",
+    "zstandard>=0.23",
 ]
 
 [dependency-groups]

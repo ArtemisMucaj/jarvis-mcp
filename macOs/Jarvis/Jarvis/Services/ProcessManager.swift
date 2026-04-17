@@ -155,6 +155,11 @@ class ProcessManager: ObservableObject {
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
+        // Truncate once at startup so stale content from previous runs is cleared.
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.truncateFile(atOffset: 0)
+            handle.closeFile()
+        }
     }
 
     private func logHandle(for url: URL) -> FileHandle? {
