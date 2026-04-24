@@ -21,7 +21,7 @@ from fastmcp.mcp_config import MCPConfig
 from fastmcp.server import FastMCP
 from jarvis.proxy import build_proxy
 from fastmcp.experimental.transforms.code_mode import CodeMode
-from fastmcp.server.transforms.search import BM25SearchTransform
+from jarvis.search import JarvisSearchTransform
 
 from jarvis.config import (
     active_config_from_presets,
@@ -157,7 +157,7 @@ def build_mcp(cfg_path: Path, name: str) -> FastMCP:
         log.info("Disabled tools: %s", ", ".join(sorted(disabled)))
         m.disable(names=disabled)
     m.add_middleware(AuthErrorMiddleware(raw_servers))
-    m.add_transform(CodeMode() if code_mode else BM25SearchTransform(max_results=5))
+    m.add_transform(CodeMode() if code_mode else JarvisSearchTransform(max_results=5))
     return m
 
 
