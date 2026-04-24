@@ -11,6 +11,8 @@ except ImportError:
     pass
 
 import asyncio
+import datetime
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,28 +33,38 @@ from jarvis.middleware import AuthErrorMiddleware
 from jarvis.api import start_api_thread
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
-# The macOS app captures stderr → ~/.jarvis/jarvis.log, so all logging goes
-# to stderr.  Rich is already installed (FastMCP dependency) and gives us
-# pretty, timestamped output that matches the existing log format.
+# All output goes to stderr. The macOS app captures stderr → ~/.jarvis/jarvis.log.
+# JSON is the default format so both Jarvis and FastMCP emit structured logs.
 
 log = logging.getLogger("jarvis")
 log.setLevel(logging.INFO)
 
-if not log.handlers:
-    try:
-        from rich.logging import RichHandler
 
-        handler = RichHandler(
-            show_path=True,
-            rich_tracebacks=True,
-            tracebacks_show_locals=False,
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        record.message = record.getMessage()
+        ts = (
+            datetime.datetime.fromtimestamp(record.created, tz=datetime.timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            + "Z"
         )
-    except ImportError:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
-        )
-    log.addHandler(handler)
+        data: dict = {
+            "ts": ts,
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.message,
+        }
+        if record.exc_info:
+            data["exc"] = self.formatException(record.exc_info)
+        return json.dumps(data, separators=(",", ":"))
+
+
+root = logging.getLogger()
+if not root.handlers:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(JsonFormatter())
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
 
 # Priority: --config flag  >  active preset in presets.json  >  ~/.jarvis/servers.json
@@ -305,7 +317,7 @@ if "--http" in sys.argv:
             timeout_graceful_shutdown=2,
             lifespan="on",
             ws="websockets-sansio",
-            log_level="info",
+            log_config=None,
         )
         await uvicorn.Server(cfg).serve()
 
